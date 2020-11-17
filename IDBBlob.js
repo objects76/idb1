@@ -158,29 +158,17 @@ export default class IDBBlob {
   dir = async (folder) => {
     const tx = this.db.transaction([FILE_STORE_], "readonly");
     const objectStore = tx.objectStore(FILE_STORE_);
+
+    let range;
     if (folder) {
+      if (folder[folder.length - 1] === "/") folder = folder.slice(0, -1);
       const DIR_SEPARATOR = "/";
       const DIR_OPEN_BOUND = String.fromCharCode(DIR_SEPARATOR.charCodeAt(0) + 1);
-      //var request = tx.objectStore(FILE_STORE_).get(fullPath);
-      return new Promise((ok, ng) => {
-        var range = IDBKeyRange.bound(folder, folder + DIR_OPEN_BOUND, false, true);
-        var request = tx.objectStore(FILE_STORE_).openCursor(range);
-        let results = new Set([]);
-        request.onerror = () => ng(request.error);
-        request.onsuccess = (event) => {
-          const cursor = event.target.result;
-          if (cursor) {
-            results.add(cursor.value.fullPath);
-            cursor.continue();
-          } else {
-            ok(results);
-          }
-        };
-      });
+      range = IDBKeyRange.bound(folder, folder + DIR_OPEN_BOUND, false, true);
     }
 
     return new Promise((ok, ng) => {
-      const request = objectStore.openCursor();
+      var request = objectStore.openCursor(range);
       let results = new Set([]);
       request.onerror = () => ng(request.error);
       request.onsuccess = (event) => {
@@ -300,16 +288,6 @@ if (window.IDBBlobTest) {
     }, 0);
   });
 
-  //
-  // list files
-  //
-  setHandler(`<button id='fs-list'>list</button>`, async (evt) => {
-    stopWriter();
-
-    const files = await idbdb.dir();
-    console.log(new Array(...files).join("\n"));
-  });
-
   setHandler(
     `<input type='file' multiple/>`,
     async (evt) => {
@@ -323,11 +301,23 @@ if (window.IDBBlobTest) {
     "change"
   );
 
+  setHandler(`<hr/><input id='fs-path'></input>`);
+
+  //
+  // list files
+  //
+  setHandler(`<button id='fs-list'>list</button>`, async (evt) => {
+    stopWriter();
+    const path = document.querySelector("#fs-path").value;
+    document.querySelector("#fs-path").value = "";
+
+    const files = await idbdb.dir(path);
+    console.log(new Array(...files).join("\n"));
+  });
+
   //
   // delete files
   //
-  setHandler(`<hr/><input id='fs-path'></input>`);
-
   setHandler(`<button id='fs-read'>read</button>`, async (evt) => {
     const path = document.querySelector("#fs-path").value;
     document.querySelector("#fs-path").value = "";
