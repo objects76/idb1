@@ -94,6 +94,7 @@ const getLastChunk = (key) => {
   return new Promise((ok, ng) => {
     let lastEntry;
     let lastKey;
+    let totalSize = 0;
     const request = objectStore.openCursor(keyRangeValue);
     request.onerror = () => ng(request.error);
     request.onsuccess = (event) => {
@@ -101,10 +102,11 @@ const getLastChunk = (key) => {
       if (cursor) {
         lastKey = cursor.primaryKey;
         lastEntry = cursor.value;
+        writtenSize += cursor.value.blob.size;
         cursor.continue();
       } else {
         const chunkSeq = Number(lastKey.substring(lastKey.lastIndexOf(":") + 1));
-        ok({ chunkSeq, entry: lastEntry });
+        ok({ chunkSeq, entry: lastEntry, totalSize });
       }
     };
   });

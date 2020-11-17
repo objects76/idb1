@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <style>
+      video {
+        /* max-width: 300px;
+        max-height: 300px; */
+        display: block;
+        margin: 10px 0;
+      }
+    </style>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <video id="mainVideo" autoplay playsinline="" webkit-playsinline="1" controls="1">
+      <source src="screen-rec-720p.mp4" type="video/mp4" />
+    </video>
+
+    <button id="btnStart">Start</button>
+    <button id="btnStop">Stop</button>
+    <button id="btnResult">Show Recorded List</button>
+
+    <!-- <video id="displayVideo" playsinline="" webkit-playsinline="1" controls="1"></video> -->
+  </body>
+
+  <script src="./media2idb.js" type="module"></script>
+</html>
