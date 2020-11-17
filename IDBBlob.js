@@ -216,7 +216,8 @@ export default class IDBBlob {
   };
 
   upload = async (fileobj, to) => {
-    const fullPath = to + "/" + fileobj.name;
+    if (to[to.length - 1] !== "/") to += "/";
+    const fullPath = to + fileobj.name;
     const writer = await this.open(fullPath, true);
     await writer.write(fileobj);
     await writer.close();
