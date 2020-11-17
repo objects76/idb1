@@ -131,8 +131,12 @@ export default class IDBBlob {
       const request = index.getAll(IDBKeyRange.only(fullPath));
       request.onerror = () => ng(request.error);
       request.onsuccess = () => {
+        const blob = new Blob(
+          request.result.map((v) => v.blob),
+          { type: BLOB_TYPE }
+        );
+        ok({ chunkSeq: request.result.size - 1, blob, totalSize: blob.size });
         console.log(request.result);
-        ok(new Set());
       };
     });
 
@@ -247,9 +251,7 @@ const getByteSize = (n) => {
   return (n / 1024 / 1024 / 1024).toFixed(2) + " GB";
 };
 
-function main(symbol) {
-  if (!symbol) return;
-
+if (window.IDBBlobTest) {
   //   // TODO:
   //   // 1. get list in db.
   //   // 2. delete file in db.
@@ -266,7 +268,7 @@ function main(symbol) {
     #test-buttons
     button, input {
         display: block;
-        width: 15rem;
+        width: 20rem;
         margin: 0.5em auto;
         box-sizing: border-box;
       }
@@ -318,28 +320,14 @@ function main(symbol) {
     }, 0);
   });
 
-  setHandler(`<button id='fs-read'>read</button>`, async (evt) => {
-    const path = "/folder1/folder2/test1.txt";
-
-    stopWriter();
-
-    const reader = await idbdb.open(path, false);
-
-    console.log(reader);
-  });
-
   //
   // download
   //
   function downloadBlob(blob, destName) {
     const link = document.createElement("a");
-
     link.download = destName;
     link.href = window.URL.createObjectURL(blob);
-
-    const clickEvent = document.createEvent("MouseEvents");
-    clickEvent.initMouseEvent("click", true, false, window, 0, 0, 0, 0, 0, false, false, false, false, 0, null);
-    link.dispatchEvent(clickEvent);
+    link.click();
   }
 
   setHandler(`<button id='fs-download'>download</button>`, async (evt) => {
@@ -358,7 +346,7 @@ function main(symbol) {
   setHandler(`<button id='fs-list'>list</button>`, async (evt) => {
     stopWriter();
 
-    const files = await idbdb.dir("/folder1");
+    const files = await idbdb.dir();
     console.log(new Array(...files).join("\n"));
   });
 
@@ -366,15 +354,23 @@ function main(symbol) {
   // delete files
   //
   setHandler(`<hr/><input id='fs-path'></input>`);
+
+  setHandler(`<button id='fs-read'>read</button>`, async (evt) => {
+    const path = document.querySelector("#fs-path").value;
+    document.querySelector("#fs-path").value = "";
+
+    stopWriter();
+    const reader = await idbdb.open(path, false);
+    console.log("reader=", reader);
+  });
+
   setHandler(`<button id='fs-delete'>delete</button>`, async (evt) => {
     stopWriter();
     const path = document.querySelector("#fs-path").value;
-
+    document.querySelector("#fs-path").value = "";
     await idbdb.delete(path);
 
     const files = await idbdb.dir();
     console.log(new Array(...files).join("\n"));
-    document.querySelector("#fs-path").value = "";
   });
 }
-main(window.IDBBlobTest);
