@@ -105,6 +105,52 @@ export default class IDBBlob {
     return idbfile;
   };
 
+  // <script src="https://cdn.jsdelivr.net/npm/web-streams-polyfill@2.0.2/dist/ponyfill.min.js"></script>
+  // <script src="https://cdn.jsdelivr.net/npm/streamsaver@2.0.3/StreamSaver.min.js"></script>
+  downloadStream = async (fullPath) => {
+    const tx = this.db.transaction([FILE_STORE_], "readonly");
+    const index = tx.objectStore(FILE_STORE_).index("fullPath");
+    return new Promise((ok, ng) => {
+      const request = index.getAll(IDBKeyRange.only(fullPath));
+      request.onerror = () => ng(request.error);
+      request.onsuccess = async () => {
+        let writer;
+        const fileStream = streamSaver.createWriteStream(fullPath);
+
+        console.log(request.result);
+        for (const { blob } of request.result) {
+          // One quick alternetive way if you don't want the hole blob.js thing:
+          // const readableStream = new Response(
+          //   Blob || String || ArrayBuffer || ArrayBufferView
+          // ).body
+          const readableStream = blob.stream();
+
+          if (false && window.WritableStream && readableStream.pipeTo) {
+            // more optimized pipe version
+            // (Safari may have pipeTo but it's useless without the WritableStream)
+            await readableStream.pipeTo(fileStream);
+            // multiple stream is not work: fileStream accept only one blob.
+          } else {
+            // Write (pipe) manually
+            if (!writer) writer = fileStream.getWriter();
+
+            const reader = readableStream.getReader();
+            const pump = async () => {
+              const res = await reader.read();
+              if (res.done) return Promise.resolve();
+              await writer.write(res.value);
+              await pump();
+            };
+
+            await pump();
+          }
+          console.log("done writing, goto next chunk");
+        }
+        if (writer) await writer.close();
+        ok();
+      };
+    });
+  };
   getLastChunk = async (fullPath) => {
     const tx = this.db.transaction([FILE_STORE_], "readonly");
     const index = tx.objectStore(FILE_STORE_);
@@ -342,6 +388,16 @@ if (window.IDBBlobTest) {
     document.querySelector("#fs-path").value = "";
     const reader = await idbdb.open(path, false);
     if (reader) downloadBlob(reader._file.blob, reader._file.fullPath);
+  });
+
+  // download with StreamSaver.js
+  setHandler(`<button>download stream</button>`, async (evt) => {
+    stopWriter();
+    let path = document.querySelector("#fs-path").value;
+    document.querySelector("#fs-path").value = "";
+
+    //path = "/upload/screen-rec-720p.mp4";
+    await idbdb.downloadStream(path);
   });
 
   setHandler(`<button id='fs-delete'>delete</button>`, async (evt) => {
