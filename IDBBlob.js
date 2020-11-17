@@ -161,10 +161,9 @@ export default class IDBBlob {
 
     let range;
     if (folder) {
+      // select all '/folder/*'
       if (folder[folder.length - 1] === "/") folder = folder.slice(0, -1);
-      const DIR_SEPARATOR = "/";
-      const DIR_OPEN_BOUND = String.fromCharCode(DIR_SEPARATOR.charCodeAt(0) + 1);
-      range = IDBKeyRange.bound(folder, folder + DIR_OPEN_BOUND, false, true);
+      range = IDBKeyRange.bound(folder + "/", folder + "0", false, true); // ASCII: />0>1>2
     }
 
     return new Promise((ok, ng) => {

@@ -10,9 +10,7 @@
             "name": "Launch Chrome against localhost",
             "url": "http://localhost:5500/idb1.html",
             "webRoot": "${workspaceFolder}",
-            "runtimeArgs": [
-                "-auto-open-devtools-for-tabs"
-            ],
+            "runtimeArgs": ["-auto-open-devtools-for-tabs"],
         }
     ]
 }
