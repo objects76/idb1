@@ -114,8 +114,8 @@ export default class IDBBlob {
       const request = index.getAll(IDBKeyRange.only(fullPath));
       request.onerror = () => ng(request.error);
       request.onsuccess = async () => {
-        let writer;
         const fileStream = streamSaver.createWriteStream(fullPath);
+        let writer = fileStream.getWriter();
 
         console.log(request.result);
         for (const { blob } of request.result) {
@@ -123,26 +123,23 @@ export default class IDBBlob {
           // const readableStream = new Response(
           //   Blob || String || ArrayBuffer || ArrayBufferView
           // ).body
+          // const readableStream = new Response(blob).body;
           const readableStream = blob.stream();
 
-          if (false && window.WritableStream && readableStream.pipeTo) {
+          if (request.result.size === 1 && window.WritableStream && readableStream.pipeTo) {
             // more optimized pipe version
             // (Safari may have pipeTo but it's useless without the WritableStream)
-            await readableStream.pipeTo(fileStream);
             // multiple stream is not work: fileStream accept only one blob.
+            await readableStream.pipeTo(fileStream);
           } else {
             // Write (pipe) manually
-            if (!writer) writer = fileStream.getWriter();
-
             const reader = readableStream.getReader();
-            const pump = async () => {
-              const res = await reader.read();
-              if (res.done) return Promise.resolve();
-              await writer.write(res.value);
-              await pump();
-            };
 
-            await pump();
+            while (true) {
+              const res = await reader.read();
+              if (res.done) break;
+              await writer.write(res.value);
+            }
           }
           console.log("done writing, goto next chunk");
         }
@@ -151,6 +148,7 @@ export default class IDBBlob {
       };
     });
   };
+
   getLastChunk = async (fullPath) => {
     const tx = this.db.transaction([FILE_STORE_], "readonly");
     const index = tx.objectStore(FILE_STORE_);
@@ -397,6 +395,7 @@ if (window.IDBBlobTest) {
     document.querySelector("#fs-path").value = "";
 
     //path = "/upload/screen-rec-720p.mp4";
+    path = "/folder1/rec-11.17.2020, 8.29.50 PM.mp4";
     await idbdb.downloadStream(path);
   });
 
