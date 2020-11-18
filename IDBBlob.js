@@ -105,7 +105,51 @@ export default class IDBBlob {
     return idbfile;
   };
 
-  getLastChunk = (fullPath) => {
+  // <script src="https://cdn.jsdelivr.net/npm/web-streams-polyfill@2.0.2/dist/ponyfill.min.js"></script>
+  // <script src="https://cdn.jsdelivr.net/npm/streamsaver@2.0.3/StreamSaver.min.js"></script>
+  downloadStream = async (fullPath) => {
+    const tx = this.db.transaction([FILE_STORE_], "readonly");
+    const index = tx.objectStore(FILE_STORE_).index("fullPath");
+    return new Promise((ok, ng) => {
+      const request = index.getAll(IDBKeyRange.only(fullPath));
+      request.onerror = () => ng(request.error);
+      request.onsuccess = async () => {
+        const fileStream = streamSaver.createWriteStream(fullPath);
+        let writer = fileStream.getWriter();
+
+        console.log(request.result);
+        for (const { blob } of request.result) {
+          // One quick alternetive way if you don't want the hole blob.js thing:
+          // const readableStream = new Response(
+          //   Blob || String || ArrayBuffer || ArrayBufferView
+          // ).body
+          // const readableStream = new Response(blob).body;
+          const readableStream = blob.stream();
+
+          if (request.result.size === 1 && window.WritableStream && readableStream.pipeTo) {
+            // more optimized pipe version
+            // (Safari may have pipeTo but it's useless without the WritableStream)
+            // multiple stream is not work: fileStream accept only one blob.
+            await readableStream.pipeTo(fileStream);
+          } else {
+            // Write (pipe) manually
+            const reader = readableStream.getReader();
+
+            while (true) {
+              const res = await reader.read();
+              if (res.done) break;
+              await writer.write(res.value);
+            }
+          }
+          console.log("done writing, goto next chunk");
+        }
+        if (writer) await writer.close();
+        ok();
+      };
+    });
+  };
+
+  getLastChunk = async (fullPath) => {
     const tx = this.db.transaction([FILE_STORE_], "readonly");
     const index = tx.objectStore(FILE_STORE_);
     return new Promise((ok, ng) => {
@@ -124,57 +168,33 @@ export default class IDBBlob {
     });
   };
 
-  getChunks = (fullPath) => {
+  getChunks = async (fullPath) => {
     const tx = this.db.transaction([FILE_STORE_], "readonly");
     const index = tx.objectStore(FILE_STORE_).index("fullPath");
     return new Promise((ok, ng) => {
       const request = index.getAll(IDBKeyRange.only(fullPath));
       request.onerror = () => ng(request.error);
       request.onsuccess = () => {
+        const blob = new Blob(
+          request.result.map((v) => v.blob),
+          { type: BLOB_TYPE }
+        );
+        ok({ chunkSeq: request.result.size - 1, blob, totalSize: blob.size });
         console.log(request.result);
-        ok(new Set());
       };
     });
-
-    // const tx = this.db.transaction([FILE_STORE_], "readonly");
-    // const index = tx.objectStore(FILE_STORE_).index("fullPath");
-
-    // return new Promise((ok, ng) => {
-    //   const blobs = [];
-    //   let lastKey;
-    //   const request = index.openCursor(IDBKeyRange.only(fullPath));
-    //   request.onerror = () => ng(request.error);
-    //   request.onsuccess = (evt) => {
-    //     const cursor = evt.target.result;
-    //     if (cursor) {
-    //       lastKey = cursor.primaryKey;
-    //       blobs.push(cursor.value.blob);
-    //       cursor.continue();
-    //     } else {
-    //       // { chunkSeq, blob, totalSize }
-    //       if (lastKey) {
-    //         const chunkSeq = IDBBlob.getChunkSequence(lastKey);
-    //         const blob = new Blob(blobs, { type: BLOB_TYPE });
-    //         ok({ chunkSeq, blob, totalSize });
-    //       } else {
-    //         ok(undefined);
-    //       }
-    //     }
-    //   };
-    // });
   };
 
   static getChunkSequence = (key) => {
     return Number(key.substring(key.lastIndexOf(":") + 1));
   };
-  static dropDb = (dbname) => {
-    console.log(`req: drop ${dbname}`);
-    const request = window.indexedDB.deleteDatabase(dbname);
+  static dropDb = () => {
+    const request = window.indexedDB.deleteDatabase(FILE_DB_);
     request.onsuccess = (evt) => {
-      console.log(`${dbname} successfully cleared and dropped`);
+      console.log(`${FILE_DB_} successfully cleared and dropped`);
     };
     request.onerror = (evt) => {
-      console.error(`${dbname} error when drop database`);
+      console.error(`${FILE_DB_} error when drop database`);
     };
   };
 
@@ -182,29 +202,16 @@ export default class IDBBlob {
   dir = async (folder) => {
     const tx = this.db.transaction([FILE_STORE_], "readonly");
     const objectStore = tx.objectStore(FILE_STORE_);
+
+    let range;
     if (folder) {
-      const DIR_SEPARATOR = "/";
-      const DIR_OPEN_BOUND = String.fromCharCode(DIR_SEPARATOR.charCodeAt(0) + 1);
-      //var request = tx.objectStore(FILE_STORE_).get(fullPath);
-      return new Promise((ok, ng) => {
-        var range = IDBKeyRange.bound(folder, folder + DIR_OPEN_BOUND, false, true);
-        var request = tx.objectStore(FILE_STORE_).openCursor(range);
-        let results = new Set([]);
-        request.onerror = () => ng(request.error);
-        request.onsuccess = (event) => {
-          const cursor = event.target.result;
-          if (cursor) {
-            results.add(cursor.value.fullPath);
-            cursor.continue();
-          } else {
-            ok(results);
-          }
-        };
-      });
+      // select all '/folder/*'
+      if (folder[folder.length - 1] === "/") folder = folder.slice(0, -1);
+      range = IDBKeyRange.bound(folder + "/", folder + "0", false, true); // ASCII: />0>1>2
     }
 
     return new Promise((ok, ng) => {
-      const request = objectStore.openCursor();
+      var request = objectStore.openCursor(range);
       let results = new Set([]);
       request.onerror = () => ng(request.error);
       request.onsuccess = (event) => {
@@ -238,6 +245,15 @@ export default class IDBBlob {
       };
     });
   };
+
+  upload = async (fileobj, to) => {
+    if (to[to.length - 1] !== "/") to += "/";
+    const fullPath = to + fileobj.name;
+    const writer = await this.open(fullPath, true);
+    await writer.write(fileobj);
+    await writer.close();
+    console.log(fullPath, "is uploaded");
+  };
 } // class IDBBlob
 
 const getByteSize = (n) => {
@@ -247,9 +263,7 @@ const getByteSize = (n) => {
   return (n / 1024 / 1024 / 1024).toFixed(2) + " GB";
 };
 
-function main(symbol) {
-  if (!symbol) return;
-
+if (window.IDBBlobTest) {
   //   // TODO:
   //   // 1. get list in db.
   //   // 2. delete file in db.
@@ -266,7 +280,7 @@ function main(symbol) {
     #test-buttons
     button, input {
         display: block;
-        width: 15rem;
+        width: 20rem;
         margin: 0.5em auto;
         box-sizing: border-box;
       }
@@ -276,12 +290,11 @@ function main(symbol) {
   const setHandler = (element, callback = undefined, eventName = "click") => {
     document.querySelector("#test-buttons").insertAdjacentHTML("beforeend", element);
 
-    const match = /id=['"]([^'"]+)/g.exec(element);
-    if (match && callback) {
-      const el = document.querySelector("#" + match[1]);
-      if (el) el.addEventListener(eventName, callback);
-      else console.error(`no element for <${selector}>`);
-    }
+    if (!callback) return;
+
+    const el = document.querySelector("#test-buttons").querySelector(":last-child");
+    if (el) el.addEventListener(eventName, callback);
+    else console.error(`no element for <${element}>`);
   };
 
   //------------------------------------------------------------------------------
@@ -290,7 +303,7 @@ function main(symbol) {
 
   let idbdb;
   window.onload = () => {
-    //IDBBlob.dropDb(FILE_DB_); // first clear old db.
+    //IDBBlob.dropDb(); // first clear old db.
     idbdb = new IDBBlob();
   };
 
@@ -318,14 +331,43 @@ function main(symbol) {
     }, 0);
   });
 
+  setHandler(
+    `<input type='file' multiple/>`,
+    async (evt) => {
+      stopWriter();
+
+      for (const file of evt.target.files) {
+        // { name, size, type }
+        idbdb.upload(file, "/upload");
+      }
+    },
+    "change"
+  );
+
+  setHandler(`<hr/><input id='fs-path'></input>`);
+
+  //
+  // list files
+  //
+  setHandler(`<button id='fs-list'>list</button>`, async (evt) => {
+    stopWriter();
+    const path = document.querySelector("#fs-path").value;
+    document.querySelector("#fs-path").value = "";
+
+    const files = await idbdb.dir(path);
+    console.log(new Array(...files).join("\n"));
+  });
+
+  //
+  // delete files
+  //
   setHandler(`<button id='fs-read'>read</button>`, async (evt) => {
-    const path = "/folder1/folder2/test1.txt";
+    const path = document.querySelector("#fs-path").value;
+    document.querySelector("#fs-path").value = "";
 
     stopWriter();
-
     const reader = await idbdb.open(path, false);
-
-    console.log(reader);
+    console.log("reader=", reader);
   });
 
   //
@@ -333,48 +375,37 @@ function main(symbol) {
   //
   function downloadBlob(blob, destName) {
     const link = document.createElement("a");
-
     link.download = destName;
     link.href = window.URL.createObjectURL(blob);
-
-    const clickEvent = document.createEvent("MouseEvents");
-    clickEvent.initMouseEvent("click", true, false, window, 0, 0, 0, 0, 0, false, false, false, false, 0, null);
-    link.dispatchEvent(clickEvent);
+    link.click();
   }
 
   setHandler(`<button id='fs-download'>download</button>`, async (evt) => {
-    const path = "/folder1/folder2/test1.txt";
-
     stopWriter();
-
+    const path = document.querySelector("#fs-path").value;
+    document.querySelector("#fs-path").value = "";
     const reader = await idbdb.open(path, false);
-
     if (reader) downloadBlob(reader._file.blob, reader._file.fullPath);
   });
 
-  //
-  // list files
-  //
-  setHandler(`<button id='fs-list'>list</button>`, async (evt) => {
+  // download with StreamSaver.js
+  setHandler(`<button>download stream</button>`, async (evt) => {
     stopWriter();
+    let path = document.querySelector("#fs-path").value;
+    document.querySelector("#fs-path").value = "";
 
-    const files = await idbdb.dir("/folder1");
-    console.log(new Array(...files).join("\n"));
+    //path = "/upload/screen-rec-720p.mp4";
+    path = "/folder1/rec-11.17.2020, 8.29.50 PM.mp4";
+    await idbdb.downloadStream(path);
   });
 
-  //
-  // delete files
-  //
-  setHandler(`<hr/><input id='fs-path'></input>`);
   setHandler(`<button id='fs-delete'>delete</button>`, async (evt) => {
     stopWriter();
     const path = document.querySelector("#fs-path").value;
-
+    document.querySelector("#fs-path").value = "";
     await idbdb.delete(path);
 
     const files = await idbdb.dir();
     console.log(new Array(...files).join("\n"));
-    document.querySelector("#fs-path").value = "";
   });
 }
-main(window.IDBBlobTest);
