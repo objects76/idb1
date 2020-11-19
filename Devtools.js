@@ -41,10 +41,13 @@ export async function checkBuffer(buf, seed) {
   return new Promise((ok, ng) => {
     if (buf instanceof Blob) {
       const blobReader = new FileReader();
+      blobReader.onabort = () => ng(blobReader.error);
       blobReader.onload = () => {
-        ok(check(new Uint8Array(blobReader.result), seed));
+        const intptr = new Uint8Array(blobReader.result);
+        ok(check(intptr, seed));
       };
       blobReader.readAsArrayBuffer(buf);
+      console.log(`state=${blobReader.readyState}`);
     } else if (buf instanceof ArrayBuffer) {
       ok(check(new Uint8Array(buf), seed));
     } else {
