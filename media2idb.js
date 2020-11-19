@@ -12,7 +12,6 @@ console.info(
 );
 
 const mainVideo = document.getElementById("mainVideo");
-const displayVideo = document.getElementById("displayVideo");
 
 const btnStart = document.getElementById("btnStart");
 const btnStop = document.getElementById("btnStop");
@@ -20,11 +19,12 @@ const btnResult = document.getElementById("btnResult");
 
 //https://stackoverflow.com/questions/52720894/is-it-possible-to-use-the-mediarecorder-api-with-html5-video
 
-const initMp4Recorder = async (stream, fileName) => {
+let recordedPath;
+
+const initMp4Recorder = async (stream) => {
   const DEBUG = true;
   const log = DEBUG ? console.log.bind(console, "[rec]") : console.log;
 
-  if (!fileName) fileName = `rec-${new Date().toLocaleString().replace(/[/:]/g, ".")}.mp4`;
   // const options = {mimeType: 'video/webm; codecs="opus,vp8"'};
   const mr = stream ? new MediaRecorder(stream) : undefined;
   DEBUG && log("mr=", mr);
@@ -38,7 +38,8 @@ const initMp4Recorder = async (stream, fileName) => {
   DEBUG && mr.addEventListener("stop", (ev) => log(ev.type));
   DEBUG && mr.addEventListener("error", (ev) => log(ev.type));
 
-  const idbfile = await idbdb.open("/test1/" + fileName, true);
+  recordedPath = `/recorded/rec-${new Date().toLocaleString().replace(/[/:]/g, ".")}.mp4`;
+  const idbfile = await idbdb.open(recordedPath, true);
 
   const stopRecording = async () => {
     DEBUG && log("stopRecording");
@@ -48,19 +49,7 @@ const initMp4Recorder = async (stream, fileName) => {
     const fullPath = idbfile._file.fullPath;
     // idbfile = undefined;
     {
-      function downloadBlob(blob, destName) {
-        const link = document.createElement("a");
-
-        link.download = destName;
-        link.href = window.URL.createObjectURL(blob);
-
-        const clickEvent = document.createEvent("MouseEvents");
-        clickEvent.initMouseEvent("click", true, false, window, 0, 0, 0, 0, 0, false, false, false, false, 0, null);
-        link.dispatchEvent(clickEvent);
-      }
-
-      const reader = await idbdb.open(fullPath, false);
-      if (reader) downloadBlob(reader._file.blob, fullPath);
+      await idbdb.open(fullPath, false);
     }
   };
 
@@ -93,7 +82,9 @@ btnStart.addEventListener("click", async () => {
   btnStop.onclick = stop;
 });
 
-btnResult.addEventListener("click", (evt) => {});
+btnResult.addEventListener("click", (evt) => {
+  idbdb.downloadStream(recordedPath);
+});
 // idb-blob setup
 //------------------------------------------------------------------------------
 // test

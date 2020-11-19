@@ -243,6 +243,8 @@ function downloadBlob(blob, destName) {
 
   link.download = destName;
   link.href = window.URL.createObjectURL(blob);
+  link.click();
+  window.URL.revokeObjectURL(link.href); // jjkim
 
   const clickEvent = document.createEvent("MouseEvents");
   clickEvent.initMouseEvent("click", true, false, window, 0, 0, 0, 0, 0, false, false, false, false, 0, null);

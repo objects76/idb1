@@ -307,6 +307,7 @@
               link.href = URL.createObjectURL(blob);
               link.download = filename;
               link.click();
+              window.URL.revokeObjectURL(link.href); // jjkim
             } else {
               channel.port1.postMessage("end");
             }
