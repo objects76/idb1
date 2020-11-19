@@ -51,11 +51,24 @@ async function append(blob, key, done) {
 
 let writeBlobs = [];
 let chunkSeq = 0;
+let lastModifiedDate = Date.now();
+
 async function writeFile(blob, fullPath) {
+  writeBlobs.push(blob);
+  if (Date.now() - lastModifiedDate < MINIMUN_WRITE_INTERVAL) return;
+
+  blob = new Blob(writeBlobs, { type: BLOB_TYPE });
+  lastModifiedDate = Date.now();
+  writeBlobs = [];
+
   const key = fullPath + ":" + chunkSeq; // append all blobs to chunk:0.
   append(blob, key, (blob) => {
     console.log(`write ${getByteSize(blob)}, ${--appendTry} remained`);
   });
+}
+function writeFlush() {
+  // just throw away remained
+  writeBlobs = [];
 }
 
 // readall
@@ -143,6 +156,7 @@ if (window.IDBBlobTest) {
 
     clearInterval(writeInterval);
     writeInterval = undefined;
+    writeFlush();
 
     console.log(`writeSeed=${writeSeed}`);
     return true;
