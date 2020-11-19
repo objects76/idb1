@@ -1,5 +1,6 @@
 "use strict";
 import devInit, { getRandomInt, buildArrayBuffer, checkBuffer, checkLinear } from "./Devtools.js";
+devInit();
 
 let idbdb;
 const FILE_STORE_ = "blobstore";
@@ -22,9 +23,12 @@ window.onload = () => {
   };
 };
 
+// indexed db request
+let idbdbPromise;
+
 // append
 let appendTry = 0;
-async function append(blob, key, done) {
+async function appendBlobIntoIdb(blob, key, done) {
   const tx = idbdb.transaction([FILE_STORE_], "readwrite");
   const store = tx.objectStore(FILE_STORE_);
 
@@ -39,10 +43,12 @@ async function append(blob, key, done) {
 
   if (oldBlob) blob = new Blob([oldBlob, blob], { type: BLOB_TYPE }); // append blob.
 
-  return new Promise((ok, ng) => {
+  await new Promise((ok, ng) => {
     ++appendTry;
+    // https://developer.mozilla.org/en-US/docs/Web/API/IDBObjectStore/put
     const updateBlobRequest = store.put(blob, key);
-    updateBlobRequest.onsuccess = (evt) => {
+    updateBlobRequest.onsuccess = () => {
+      if (updateBlobRequest.error) console.error("put:", updateBlobRequest.error);
       done(blob);
       ok();
     };
@@ -53,18 +59,30 @@ let writeBlobs = [];
 let chunkSeq = 0;
 let lastModifiedDate = Date.now();
 
+let writtenBlobSize = 0;
+
 async function writeFile(blob, fullPath) {
   writeBlobs.push(blob);
   if (Date.now() - lastModifiedDate < MINIMUN_WRITE_INTERVAL) return;
 
+  if (idbdbPromise) await idbdbPromise;
   blob = new Blob(writeBlobs, { type: BLOB_TYPE });
   lastModifiedDate = Date.now();
   writeBlobs = [];
 
   const key = fullPath + ":" + chunkSeq; // append all blobs to chunk:0.
-  append(blob, key, (blob) => {
+  await appendBlobIntoIdb(blob, key, (blob) => {
+    console.assert(blob.size > writtenBlobSize);
+    writtenBlobSize = blob.size;
     console.log(`write ${getByteSize(blob)}, ${--appendTry} remained`);
   });
+}
+
+async function writeInit() {
+  if (idbdbPromise) await idbdbPromise;
+  idbdbPromise = undefined;
+  writtenBlobSize = 0;
+  writeBlobs = [];
 }
 function writeFlush() {
   // just throw away remained
@@ -75,7 +93,8 @@ function writeFlush() {
 function nextSep(sep) {
   return String.fromCharCode(sep.charCodeAt(0) + 1);
 }
-async function readFile(fullPath) {
+
+async function getIdbBlob(fullPath) {
   return new Promise((ok, ng) => {
     const range = IDBKeyRange.bound(fullPath + ":", fullPath + nextSep(":"), false, true);
     const tx = idbdb.transaction([FILE_STORE_], "readonly");
@@ -85,6 +104,12 @@ async function readFile(fullPath) {
       ok(new Blob(request.result, { type: BLOB_TYPE }));
     };
   });
+}
+
+async function readFile(fullPath) {
+  if (idbdbPromise) await idbdbPromise;
+  idbdbPromise = undefined;
+  return await getIdbBlob(fullPath);
 }
 
 const getByteSize = (n) => {
@@ -156,9 +181,9 @@ if (window.IDBBlobTest) {
 
     clearInterval(writeInterval);
     writeInterval = undefined;
-    writeFlush();
+    //writeFlush();
 
-    console.log(`writeSeed=${writeSeed}`);
+    console.log(`clearInterval: writeSeed=${writeSeed}`);
     return true;
   };
 
@@ -172,12 +197,15 @@ if (window.IDBBlobTest) {
     }
 
     writeSeed = 0;
+    writeInit();
     writeInterval = setInterval(() => {
       let n = getRandomInt((5000 / 8) * 30 - 4096, (5000 / 8) * 30);
       const { nextSeed, buffer } = buildArrayBuffer(n, writeSeed);
       writeSeed = nextSeed;
 
       const blob = new Blob([buffer], { type: BLOB_TYPE });
+      //console.log(`call writeFile(${getByteSize(blob)})`);
+      console.assert(writeInterval);
       writeFile(blob, path);
     }, 0);
   });
@@ -191,6 +219,7 @@ if (window.IDBBlobTest) {
     stopWriter();
     const path = document.querySelector("#fs-path").value;
     if (path.length < 3) return;
+    document.querySelector("#fs-path").value = "";
 
     const blob = await readFile(path);
     console.log(`[read] size= ${getByteSize(blob)}`);
@@ -202,17 +231,18 @@ if (window.IDBBlobTest) {
   //
   function downloadBlob(blob, destName) {}
 
-  setHandler(`<button>download</button>`, async (evt) => {
+  setHandler(`<button>DOWNLOAD</button>`, async (evt) => {
     stopWriter();
     const path = document.querySelector("#fs-path").value;
+    if (path.length < 3) return;
+
+    const blob = await readFile(path);
+    console.log(`[read] size= ${getByteSize(blob)}`);
 
     const link = document.createElement("a");
-    link.download = destName;
+    link.download = path;
     link.href = window.URL.createObjectURL(blob);
     link.click();
     window.URL.revokeObjectURL(link.href); // jjkim
-
-    const reader = await idbdb.open(path, false);
-    if (reader) downloadBlob(reader._file.blob, reader._file.fullPath);
   });
 }
