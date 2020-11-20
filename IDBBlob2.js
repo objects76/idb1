@@ -5,16 +5,15 @@ devInit();
 const FILE_DB_ = "blob.test.db";
 const FILE_STORE_ = "blobstore";
 const MAX_CHUNK_SIZE_ = 1 * 1024 * 1024;
-const MAX_FILE_SIZE_ = 12 * 1024 * 1024; // 12MB
+const MAX_FILE_SIZE_ = 512 * 1024 * 1024;
 const BLOB_TYPE = "application/octet-stream";
 const MINIMUN_WRITE_INTERVAL = 100; // ms
-const SEND_INTERVAL = 0; // ms
 
 //window.indexedDB = window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB;
 window.IDBTransaction = window.IDBTransaction || window.webkitIDBTransaction || window.msIDBTransaction;
 window.IDBKeyRange = window.IDBKeyRange || window.webkitIDBKeyRange || window.msIDBKeyRange;
 
-const getKey = (path, seq) => path + ":" + ("00" + seq).slice(-3);
+const getKey = (path, seq) => path + ":" + ("00" + seq).slice(-3); // up to (MAX_CHUNK_SIZE_*1000).
 const getPath = (key) => key.slice(0, -4);
 const nextChar = (c) => String.fromCharCode(c.charCodeAt(0) + 1);
 
@@ -67,7 +66,7 @@ class BlobIDB {
       const request = tx.objectStore(FILE_STORE_).getAll(range);
       request.onerror = () => reject(request.error || `Can't read ${fullPath}`);
       request.onsuccess = () => {
-        console.log(`all blobs = #${request.result.length}`);
+        console.debug(`all blobs = #${request.result.length}`);
         resolve(
           new Blob(
             request.result.map((v) => v.blob),
@@ -78,11 +77,25 @@ class BlobIDB {
     });
   };
 
+  rmdir = async (folder) => {
+    const tx = this.idb.transaction([FILE_STORE_], "readwrite");
+    if (folder) {
+      if (folder.endsWith("/")) folder = folder.slice(0, -1);
+      const range = IDBKeyRange.bound(folder + "/", folder + nextChar("/"), false, true);
+      tx.objectStore(FILE_STORE_).delete(range);
+    } else {
+      tx.objectStore(FILE_STORE_).clear();
+    }
+
+    return new Promise((resolve, reject) => {
+      setuptx(tx, resolve, reject);
+    });
+  };
   // return list of files in idb.
   dir = async (folder) => {
     let range;
     if (folder) {
-      if (folder.slice(-1) === "/") folder = folder.slice(0, -1);
+      if (folder.endsWith("/")) folder = folder.slice(0, -1);
       range = IDBKeyRange.bound(folder + "/", folder + nextChar("/"), false, true);
     }
 
@@ -109,7 +122,7 @@ class BlobIDB {
 
   // upload a fileblob
   upload = async (fileblob, toFolder) => {
-    if (toFolder.slice(-1) !== "/") toFolder += "/";
+    if (!toFolder.endsWith("/")) toFolder += "/";
     const fullPath = toFolder + fileblob.name;
     const key = getKey(fullPath, 0);
     this.put(fileblob, 0, key);
@@ -206,7 +219,7 @@ if (window.IDBBlobTest) {
   //------------------------------------------------------------------------------
   // test
   //------------------------------------------------------------------------------
-
+  const SEND_INTERVAL = 0; // ms
   setHandler(
     `<input type='file' multiple/>`,
     async (evt) => {
@@ -274,7 +287,6 @@ if (window.IDBBlobTest) {
   //
   // download
   //
-
   setHandler(`<button>DOWNLOAD</button>`, async (evt) => {
     const path = document.querySelector("#fs-path").value;
     if (path.length < 3) return;
@@ -289,6 +301,9 @@ if (window.IDBBlobTest) {
     window.URL.revokeObjectURL(link.href); // jjkim
   });
 
+  //
+  // dir
+  //
   setHandler(`<button id='dir'>DIR</button>`, async (evt) => {
     let path = document.querySelector("#fs-path").value;
     if (path.length < 3) path = undefined;
@@ -305,6 +320,16 @@ if (window.IDBBlobTest) {
     }
 
     ul.innerHTML = htmls.join("\n");
+  });
+
+  //
+  // dir
+  //
+  setHandler(`<button>RMDIR</button>`, async (evt) => {
+    let path = document.querySelector("#fs-path").value;
+    if (path.length < 3) path = undefined;
+
+    await idbdb.rmdir(path);
   });
 
   //
