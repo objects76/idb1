@@ -26,32 +26,65 @@ window.onload = () => {
 // indexed db request
 let idbdbPromise;
 
+function setuptx(tx, resolve, reject) {
+  const unlisten = () => {
+    tx.removeEventListener("complete", complete);
+    tx.removeEventListener("error", error);
+    tx.removeEventListener("abort", error);
+  };
+  const complete = () => {
+    resolve();
+    unlisten();
+  };
+  const error = () => {
+    reject(tx.error || new DOMException("AbortError", "AbortError"));
+    unlisten();
+  };
+  tx.addEventListener("complete", complete);
+  tx.addEventListener("error", error);
+  tx.addEventListener("abort", error);
+}
 // append
 let appendTry = 0;
 async function appendBlobIntoIdb(blob, key, done) {
   const tx = idbdb.transaction([FILE_STORE_], "readwrite");
   const store = tx.objectStore(FILE_STORE_);
 
-  // get old if existed
-  const oldBlob = await new Promise((ok, ng) => {
-    const getRequest = store.get(key);
-    getRequest.onsuccess = (evt) => {
-      const old = getRequest.result;
-      ok(old ? old : undefined);
-    };
-  });
+  // // get old if existed
+  // const oldBlob = await new Promise((ok, ng) => {
+  //   const getRequest = store.get(key);
+  //   getRequest.onsuccess = (evt) => {
+  //     const old = getRequest.result;
+  //     ok(old ? old : undefined);
+  //   };
+  // });
 
-  if (oldBlob) blob = new Blob([oldBlob, blob], { type: BLOB_TYPE }); // append blob.
+  // if (oldBlob) blob = new Blob([oldBlob, blob], { type: BLOB_TYPE }); // append blob.
+
+  // await new Promise((ok, ng) => {
+  //   ++appendTry;
+  //   // https://developer.mozilla.org/en-US/docs/Web/API/IDBObjectStore/put
+  //   const updateBlobRequest = store.put(blob, key);
+  //   updateBlobRequest.onsuccess = () => {
+  //     if (updateBlobRequest.error) console.error("put:", updateBlobRequest.error);
+  //     done(blob);
+  //     ok();
+  //   };
+  // });
+  const getRequest = store.get(key);
+  getRequest.onsuccess = (evt) => {
+    const oldBlob = getRequest.result;
+    if (oldBlob) blob = new Blob([oldBlob, blob], { type: BLOB_TYPE });
+
+    ++appendTry;
+    const updateBlobRequest = store.put(blob, key);
+    updateBlobRequest.onsuccess = (evt) => {
+      done(blob);
+    };
+  };
 
   await new Promise((ok, ng) => {
-    ++appendTry;
-    // https://developer.mozilla.org/en-US/docs/Web/API/IDBObjectStore/put
-    const updateBlobRequest = store.put(blob, key);
-    updateBlobRequest.onsuccess = () => {
-      if (updateBlobRequest.error) console.error("put:", updateBlobRequest.error);
-      done(blob);
-      ok();
-    };
+    setuptx(tx, ok, ng);
   });
 }
 
