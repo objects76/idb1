@@ -1,5 +1,5 @@
 "use strict";
-import devInit, { getRandomInt, buildArrayBuffer, checkBuffer, getByteSize } from "./Devtools.js";
+import devInit, { getRandomInt, getTestBlob, verifyTestBlob, getByteSize } from "./Devtools.js";
 // devInit();
 //
 // using idb as binary file saving.
@@ -423,7 +423,7 @@ if (window.IDBBlobTest) {
     let nth = 0;
     writeInterval = setInterval(() => {
       let n = getRandomInt((5000 / 8) * 30 - 4096, (5000 / 8) * 30);
-      const { nextSeed, buffer } = buildArrayBuffer(n, writeSeed);
+      const { nextSeed, buffer } = getTestBlob(n, writeSeed);
       writeSeed = nextSeed;
       fileWriter.write(new Blob([buffer], { type: BLOB_TYPE }));
       // console.log(`[${nth++}] - new chunk: chunk=${n}, total=${writeSeed}`);
@@ -456,12 +456,12 @@ if (window.IDBBlobTest) {
 
     const blob = await idbdb.getChunks(path);
     console.log("readblob: ", blob?.size);
-    if (blob && (await checkBuffer(blob))) console.log("verified");
+    if (blob && (await verifyTestBlob(blob))) console.log("verified");
     return;
 
     const datafile = await idbdb.open(path, false);
     console.log("[read]", datafile, "done");
-    if (await checkBuffer(new Blob(datafile.blobs))) console.log("verified");
+    if (await verifyTestBlob(new Blob(datafile.blobs))) console.log("verified");
   });
 
   //
@@ -548,13 +548,13 @@ if (window.IDBBlobTest) {
 
     for (let i = 0; i < 4; ++i) {
       let n = getRandomInt((5000 / 8) * 30 - 4096, (5000 / 8) * 30);
-      const { nextSeed, buffer } = buildArrayBuffer(n, writeSeed);
+      const { nextSeed, buffer } = getTestBlob(n, writeSeed);
       writeSeed = nextSeed;
       blobs.push(buffer);
       console.log(`new chunk: ${n}`);
     }
 
-    checkBuffer(new Blob(blobs, { type: BLOB_TYPE }), 0);
+    verifyTestBlob(new Blob(blobs, { type: BLOB_TYPE }), 0);
   }
   // unittest();
 }

@@ -11,14 +11,27 @@ export default function devInit(...args) {
   };
 
   console.log("console.assert is replaced");
+  // testDevtools();
 }
 
+// get [min, max)
 export function getRandomInt(min, max) {
   min = Math.ceil(min);
   max = Math.floor(max);
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+  return Math.floor(Math.random() * (max - min)) + min;
 }
 
+async function testDevtools() {
+  return new Promise((resolve, reject) => {
+    console.log("getRandomInt(10, 20) test: 10,11,12, ...19");
+    for (let i = 0; i < 99999999; ++i) {
+      const n = getRandomInt(10, 20);
+      if (n < 10 || n >= 20) reject(`invalid random value: ${n}`);
+      if (i % 1000 === 0) console.log(`try: ${i}`);
+    }
+    resolve("ok");
+  });
+}
 export function getByteSize(n) {
   if (n instanceof Blob) n = n.size;
   if (n < 1024) return n + " B";
@@ -27,74 +40,59 @@ export function getByteSize(n) {
   return (n / 1024 / 1024 / 1024).toFixed(2) + " GB";
 }
 
-export function buildArrayBuffer(n, seed = 0) {
+export function getTestBlob(n, seed = 0) {
   console.assert(n >= 4);
   const buffer = new ArrayBuffer(n);
   const cptr = new Uint8Array(buffer);
   for (let i = 0; i < cptr.length; ++i, ++seed) cptr[i] = seed % 256;
 
-  return { nextSeed: seed, buffer };
+  return new Blob([buffer], { type: "application/octet-stream" });
 }
 
-const check = (arrbuf, seed) => {
-  const cptr = new Uint8Array(arrbuf);
-  for (let i = 0; i < cptr.length; ++i, ++seed) {
-    if (cptr[i] !== seed % 256) {
-      console.error(`[${i}/${getByteSize(i)}]: expect ${seed % 256}, but ${cptr[i]}`);
-      return false;
-    }
-  }
-  console.log(`buffer(${getByteSize(arrbuf.byteLength)} verified)`);
-  return true;
-};
-
-export async function checkBuffer(buf, seed = 0) {
+export async function verifyTestBlob(buf, seed = 0) {
   if (!buf) return Promise.reject("null buffer");
-  return new Promise((ok, ng) => {
+
+  const check = (arrbuf) => {
+    const cptr = new Uint8Array(arrbuf);
+    for (let i = 0; i < cptr.length; ++i, ++seed) {
+      if (cptr[i] !== seed % 256) {
+        console.error(`[${i}/${getByteSize(i)}]: expect ${seed % 256}, but ${cptr[i]}`);
+        return false;
+      }
+    }
+    console.log(`buffer(${getByteSize(arrbuf.byteLength)} verified)`);
+    return true;
+  };
+
+  return new Promise((resolve, reject) => {
     if (buf instanceof Blob) {
       const blobReader = new FileReader();
-      blobReader.onabort = () => ng(blobReader.error);
-      blobReader.onload = () => {
-        ok(check(blobReader.result, seed));
-      };
+      blobReader.onload = () => resolve(check(blobReader.result));
       blobReader.readAsArrayBuffer(buf);
-      console.log(`state=${blobReader.readyState}`);
     } else if (buf instanceof ArrayBuffer) {
-      ok(check(buf, seed));
+      resolve(check(buf));
     } else {
       throw new Error("invalid buffer type");
     }
   });
 }
 
-// export async function checkLinear(blob) {
-//   return new Promise((ok) => {
-//     const blobReader = new FileReader();
-//     blobReader.onload = () => {
-//       const intptr = new Uint8Array(blobReader.result);
-//       ok(check(intptr, intptr[0]));
-//     };
-//     blobReader.readAsArrayBuffer(blob);
-//   });
-// }
-
 export async function getAt(buf, idx) {
+  const get = (arrbuf, idx) => {
+    const cptr = new Uint8Array(arrbuf);
+    console.log(`buf[${idx} = ${cptr[idx]}`);
+    return cptr[idx];
+  };
   if (buf instanceof Blob) {
     return new Promise((ok, ng) => {
       const blobReader = new FileReader();
       blobReader.onabort = () => ng(blobReader.error);
-      blobReader.onload = () => {
-        const intptr = new Uint8Array(blobReader.result);
-        console.log(`buf[${idx} = ${intptr[idx]}`);
-        ok(intptr[idx]);
-      };
+      blobReader.onload = () => ok(get(blobReader.result, idx));
+      blobReader.readAsArrayBuffer(buf);
+      console.log(`state=${blobReader.readyState}`);
     });
-    blobReader.readAsArrayBuffer(buf);
-    console.log(`state=${blobReader.readyState}`);
   } else if (buf instanceof ArrayBuffer) {
-    const intptr = new Uint8Array(buf);
-    console.log(`buf[${idx} = ${intptr[idx]}`);
-    Promise.resolve(intptr[idx]);
+    return Promise.resolve(get(buf, idx));
   } else {
     throw new Error("invalid buffer type");
   }

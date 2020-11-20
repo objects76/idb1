@@ -1,5 +1,5 @@
 "use strict";
-import devInit, { getRandomInt, buildArrayBuffer, checkBuffer, getByteSize } from "./Devtools.js";
+import devInit, { getRandomInt, getTestBlob, verifyTestBlob, getByteSize } from "./Devtools.js";
 devInit();
 
 let idbdb;
@@ -322,8 +322,8 @@ if (window.IDBBlobTest) {
     writeInit();
 
     let offset = 0;
-    const { buffer } = buildArrayBuffer(1024 * 1024 * 15);
-    checkBuffer(buffer);
+    const { buffer } = getTestBlob(1024 * 1024 * 15);
+    verifyTestBlob(buffer);
 
     writeInterval = setInterval(() => {
       let n = getRandomInt((5000 / 8) * 30 - 4096, (5000 / 8) * 30);
@@ -350,7 +350,7 @@ if (window.IDBBlobTest) {
 
     const blob = await readFile(path);
     console.log(`[read] size= ${getByteSize(blob)}`);
-    if (await checkBuffer(blob, 0)) console.log("verified");
+    if (await verifyTestBlob(blob, 0)) console.log("verified");
   });
 
   //
