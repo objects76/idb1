@@ -200,17 +200,11 @@ if (window.IDBBlobTest) {
     `<input type='file' multiple/>`,
     async (evt) => {
       for (const file of evt.target.files) {
-        // { name, size, type }
         idbdb.upload(file, "/upload");
       }
     },
     "change"
   );
-  setHandler(`<button>reopen idb</button>`, async (evt) => {
-    idbdb.closeDB();
-    idbdb = new BlobIDB();
-  });
-
   setHandler(`<hr/><input id='fs-path'></input>`);
 
   //
@@ -236,23 +230,23 @@ if (window.IDBBlobTest) {
       let n = getRandomInt((5000 / 8) * 30 - 4096, (5000 / 8) * 30);
       const chunk = buffer.slice(offset, offset + n);
       const blob = new Blob([chunk], { type: BLOB_TYPE });
-      writer.write(blob);
-
-      offset += n;
-      if (offset >= buffer.byteLength) {
-        clearInterval(writeInterval);
-        writer.close();
-        writer = undefined;
+      if (!writer) clearInterval(writeInterval);
+      else {
+        writer.write(blob);
+        offset += n;
+        if (offset >= buffer.byteLength) {
+          clearInterval(writeInterval);
+          writer.close();
+          writer = undefined;
+        }
       }
     }, SEND_INTERVAL);
   });
 
   setHandler(`<button>STOP WRITE and DIR</button>`, async (evt) => {
-    await writer.close();
-
-    const pathlist = await idbdb.dir(path);
-    console.log("---------------------------------------------------");
-    console.log([...pathlist].join("\n"));
+    await writer?.close(); // it means un-expected stop(lik closing browser tab).
+    writer = undefined;
+    document.querySelector("#dir").click();
   });
   //
   // read file
@@ -285,12 +279,30 @@ if (window.IDBBlobTest) {
     window.URL.revokeObjectURL(link.href); // jjkim
   });
 
-  setHandler(`<button>DIR</button>`, async (evt) => {
+  setHandler(`<button id='dir'>DIR</button>`, async (evt) => {
     let path = document.querySelector("#fs-path").value;
     if (path.length < 3) path = undefined;
 
     const pathlist = await idbdb.dir(path);
     console.log("---------------------------------------------------");
-    console.log([...pathlist].join("\n"));
+    //console.log([...pathlist].join("\n"));
+
+    const ul = document.querySelector("#ui-dir");
+    const htmls = [];
+    htmls.push(`<li>[${new Date().toLocaleString()}]</li>`);
+    for (const [path, size] of pathlist) {
+      htmls.push(`<li><a href='#${path}'>${path}</a>, size=${size}</li>`);
+    }
+
+    ul.innerHTML = htmls.join("\n");
+  });
+
+  //
+  // file lists
+  //
+  setHandler("<ul id='ui-dir'></ul>", (evt) => {
+    evt.stopPropagation();
+    evt.preventDefault();
+    if (evt.target.hash) document.querySelector("#fs-path").value = window.decodeURI(evt.target.hash.substring(1));
   });
 }
