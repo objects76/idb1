@@ -1,5 +1,5 @@
 "use strict";
-import devInit, { getRandomInt, buildArrayBuffer, checkBuffer, checkLinear } from "./Devtools.js";
+import devInit, { getRandomInt, buildArrayBuffer, checkBuffer, getByteSize } from "./Devtools.js";
 devInit();
 
 let idbdb;
@@ -75,6 +75,9 @@ async function appendBlobIntoIdb(blob, key, done) {
   getRequest.onsuccess = (evt) => {
     const oldBlob = getRequest.result;
     if (oldBlob) blob = new Blob([oldBlob, blob], { type: BLOB_TYPE });
+    else {
+      console.log(`key: ${key.substr(-2)}`);
+    }
 
     ++appendTry;
     const updateBlobRequest = store.put(blob, key);
@@ -88,22 +91,38 @@ async function appendBlobIntoIdb(blob, key, done) {
   });
 }
 
-let writeBlobs = [];
-let chunkSeq = 0;
+// put without get(key)
+let putTry = 0;
+async function putBlobIntoIdb(blob, key, done) {
+  const tx = idbdb.transaction([FILE_STORE_], "readwrite");
+
+  ++putTry;
+  const updateBlobRequest = tx.objectStore(FILE_STORE_).put(blob, key);
+  updateBlobRequest.onsuccess = (evt) => {
+    done(blob);
+  };
+
+  await new Promise((ok, ng) => {
+    setuptx(tx, ok, ng);
+  });
+}
+
+// writeFile???
+let blobCache = [];
 let lastModifiedDate = Date.now();
 
 let writtenBlobSize = 0;
 
 async function writeFile(blob, fullPath) {
-  writeBlobs.push(blob);
+  blobCache.push(blob);
   if (Date.now() - lastModifiedDate < MINIMUN_WRITE_INTERVAL) return;
 
   if (idbdbPromise) await idbdbPromise;
-  blob = new Blob(writeBlobs, { type: BLOB_TYPE });
+  blob = new Blob(blobCache, { type: BLOB_TYPE });
   lastModifiedDate = Date.now();
-  writeBlobs = [];
+  blobCache = [];
 
-  const key = fullPath + ":" + chunkSeq; // append all blobs to chunk:0.
+  const key = fullPath + ":0"; // append all blobs to chunk:0.
   await appendBlobIntoIdb(blob, key, (blob) => {
     console.assert(blob.size > writtenBlobSize);
     writtenBlobSize = blob.size;
@@ -111,15 +130,94 @@ async function writeFile(blob, fullPath) {
   });
 }
 
+let chunkSeq;
+let chunkBlobCache;
+let oldChunkSize;
+let chunkOffset;
+async function writeFileWithChunk(blob, fullPath) {
+  blobCache.push(blob);
+  if (Date.now() - lastModifiedDate < MINIMUN_WRITE_INTERVAL) return;
+
+  if (idbdbPromise) await idbdbPromise;
+  lastModifiedDate = Date.now();
+
+  if ("with appendBlobIntoIdb") {
+    const blob4idb = new Blob(blobCache, { type: BLOB_TYPE });
+    const key = fullPath + ":" + chunkSeq;
+    blobCache = [];
+    await appendBlobIntoIdb(blob4idb, key, (blobDone) => {
+      chunkOffset += blob4idb.size;
+      console.assert(blobDone.size >= blob4idb.size);
+      console.log(
+        `write: key=${key.substr(-2)}, ${getByteSize(blobDone)}/${chunkOffset},${getByteSize(
+          chunkOffset
+        )}, ${--appendTry} remained`
+      );
+
+      if (blobDone.size >= MAX_CHUNK_SIZE_) {
+        ++chunkSeq;
+      }
+    });
+  } else {
+    // if (writtenBlobSize >= MAX_CHUNK_SIZE_) {
+    //   console.log(`write: new chunk=${chunkSeq}, old size= ${getByteSize(writtenBlobSize)}`);
+    //   chunkBlobCache = [];
+    //   ++chunkSeq;
+    //   writtenBlobSize = 0;
+    // }
+    const chunk4idb = new Blob(blobCache, { type: BLOB_TYPE });
+    const key = fullPath + ":" + chunkSeq;
+    const currentChunkOffset = chunkOffset;
+    if (chunk4idb.size >= MAX_CHUNK_SIZE_) {
+      // this is last write of current chunk. so update there.
+      chunkOffset += chunk4idb.size;
+      blobCache = [];
+      ++chunkSeq;
+    }
+
+    await putBlobIntoIdb(chunk4idb, key, (blobDone) => {
+      console.assert(blobDone.size === chunk4idb.size);
+      console.log(
+        `write: key=${key.substr(-2)}, ${getByteSize(blobDone)}/${currentChunkOffset + blobDone.size},${getByteSize(
+          currentChunkOffset + blobDone.size
+        )}, ${--putTry} remained`
+      );
+    });
+    // if (chunkBlob.size >= MAX_CHUNK_SIZE_) {
+    //   console.log(`write: new chunk=${chunkSeq}, old size= ${getByteSize(chunkBlob)}`);
+    //   chunkBlob = new Blob([], { type: BLOB_TYPE });
+    //   ++chunkSeq;
+    //   writtenBlobSize = 0;
+    // }
+    // chunkBlob = new Blob([chunkBlob, ...blobCache], { type: BLOB_TYPE });
+    // const key = fullPath + ":" + chunkSeq;
+    // blobCache = [];
+
+    // await putBlobIntoIdb(chunkBlob.slice(), key, (blobDone) => {
+    //   console.assert(
+    //     blobDone.size > writtenBlobSize,
+    //     `cur=${getByteSize(blobDone)}, old=${getByteSize(writtenBlobSize)}}`
+    //   );
+    //   writtenBlobSize = blobDone.size;
+    //   console.log(`write: chunk=${chunkSeq}, ${getByteSize(blobDone)}, ${--putTry} remained`);
+    // });
+  }
+}
+
 async function writeInit() {
   if (idbdbPromise) await idbdbPromise;
   idbdbPromise = undefined;
   writtenBlobSize = 0;
-  writeBlobs = [];
+  blobCache = [];
+  chunkSeq = 0;
+  chunkBlobCache = [];
+
+  oldChunkSize = 0;
+  chunkOffset = 0;
 }
 function writeFlush() {
   // just throw away remained
-  writeBlobs = [];
+  blobCache = [];
 }
 
 // readall
@@ -144,14 +242,6 @@ async function readFile(fullPath) {
   idbdbPromise = undefined;
   return await getIdbBlob(fullPath);
 }
-
-const getByteSize = (n) => {
-  if (n instanceof Blob) n = n.size;
-  if (n < 1024) return n + " B";
-  if (n < 1024 * 1024) return (n / 1024).toFixed(2) + " KB";
-  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(2) + " MB";
-  return (n / 1024 / 1024 / 1024).toFixed(2) + " GB";
-};
 
 if (window.IDBBlobTest) {
   //------------------------------------------------------------------------------
@@ -208,7 +298,6 @@ if (window.IDBBlobTest) {
   // write
   //
   let writeInterval;
-  let writeSeed = 0;
   const stopWriter = async () => {
     if (!writeInterval) return false;
 
@@ -216,7 +305,7 @@ if (window.IDBBlobTest) {
     writeInterval = undefined;
     //writeFlush();
 
-    console.log(`clearInterval: writeSeed=${writeSeed}`);
+    console.log(`stopWriter: called`);
     return true;
   };
 
@@ -229,19 +318,23 @@ if (window.IDBBlobTest) {
       document.querySelector("#fs-path").value = path;
     }
 
-    writeSeed = 0;
     writeInit();
+
+    let offset = 0;
+    const { buffer } = buildArrayBuffer(1024 * 1024 * 15);
+    checkBuffer(buffer);
+
     writeInterval = setInterval(() => {
       let n = getRandomInt((5000 / 8) * 30 - 4096, (5000 / 8) * 30);
-      const { nextSeed, buffer } = buildArrayBuffer(n, writeSeed);
-      writeSeed = nextSeed;
+      const chunk = buffer.slice(offset, offset + n);
+      const blob = new Blob([chunk], { type: BLOB_TYPE });
+      writeFileWithChunk(blob, path);
 
-      const blob = new Blob([buffer], { type: BLOB_TYPE });
-      //console.log(`call writeFile(${getByteSize(blob)})`);
-      console.assert(writeInterval);
-      writeFile(blob, path);
+      offset += n;
+      if (offset >= buffer.byteLength) stopWriter();
     }, 0);
   });
+
   setHandler(`<button>STOP WRITE FILE</button>`, async (evt) => {
     stopWriter();
   });
