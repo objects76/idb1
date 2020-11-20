@@ -49,6 +49,7 @@ const check = (arrbuf, seed) => {
 };
 
 export async function checkBuffer(buf, seed = 0) {
+  if (!buf) return Promise.reject("null buffer");
   return new Promise((ok, ng) => {
     if (buf instanceof Blob) {
       const blobReader = new FileReader();

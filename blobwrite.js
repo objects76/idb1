@@ -7,6 +7,7 @@ const FILE_STORE_ = "blobstore";
 const MAX_CHUNK_SIZE_ = 1 * 1024 * 1024;
 const BLOB_TYPE = "application/octet-stream";
 const MINIMUN_WRITE_INTERVAL = 100; // ms
+const SEND_INTERVAL = 0; // ms
 
 window.IDBTransaction = window.IDBTransaction || window.webkitIDBTransaction || window.msIDBTransaction;
 window.IDBKeyRange = window.IDBKeyRange || window.webkitIDBKeyRange || window.msIDBKeyRange;
@@ -122,7 +123,7 @@ async function writeFile(blob, fullPath) {
   lastModifiedDate = Date.now();
   blobCache = [];
 
-  const key = fullPath + ":0"; // append all blobs to chunk:0.
+  const key = fullPath + ":000"; // append all blobs to chunk:0.
   await appendBlobIntoIdb(blob, key, (blob) => {
     console.assert(blob.size > writtenBlobSize);
     writtenBlobSize = blob.size;
@@ -141,15 +142,15 @@ async function writeFileWithChunk(blob, fullPath) {
   if (idbdbPromise) await idbdbPromise;
   lastModifiedDate = Date.now();
 
-  if ("with appendBlobIntoIdb") {
+  if ("!with appendBlobIntoIdb") {
     const blob4idb = new Blob(blobCache, { type: BLOB_TYPE });
-    const key = fullPath + ":" + chunkSeq;
+    const key = fullPath + ":" + ("00" + chunkSeq).slice(-3);
     blobCache = [];
     await appendBlobIntoIdb(blob4idb, key, (blobDone) => {
       chunkOffset += blob4idb.size;
       console.assert(blobDone.size >= blob4idb.size);
       console.log(
-        `write: key=${key.substr(-2)}, ${getByteSize(blobDone)}/${chunkOffset},${getByteSize(
+        `write: key=${key.substr(-4)}, ${getByteSize(blobDone)}/${chunkOffset},${getByteSize(
           chunkOffset
         )}, ${--appendTry} remained`
       );
@@ -166,7 +167,7 @@ async function writeFileWithChunk(blob, fullPath) {
     //   writtenBlobSize = 0;
     // }
     const chunk4idb = new Blob(blobCache, { type: BLOB_TYPE });
-    const key = fullPath + ":" + chunkSeq;
+    const key = fullPath + ":" + ("00" + chunkSeq).slice(-3);
     const currentChunkOffset = chunkOffset;
     if (chunk4idb.size >= MAX_CHUNK_SIZE_) {
       // this is last write of current chunk. so update there.
@@ -178,7 +179,7 @@ async function writeFileWithChunk(blob, fullPath) {
     await putBlobIntoIdb(chunk4idb, key, (blobDone) => {
       console.assert(blobDone.size === chunk4idb.size);
       console.log(
-        `write: key=${key.substr(-2)}, ${getByteSize(blobDone)}/${currentChunkOffset + blobDone.size},${getByteSize(
+        `write: key=${key.substr(-4)}, ${getByteSize(blobDone)}/${currentChunkOffset + blobDone.size},${getByteSize(
           currentChunkOffset + blobDone.size
         )}, ${--putTry} remained`
       );
@@ -332,7 +333,7 @@ if (window.IDBBlobTest) {
 
       offset += n;
       if (offset >= buffer.byteLength) stopWriter();
-    }, 0);
+    }, SEND_INTERVAL);
   });
 
   setHandler(`<button>STOP WRITE FILE</button>`, async (evt) => {

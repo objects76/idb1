@@ -1,5 +1,5 @@
 "use strict";
-import devInit, { getRandomInt, buildArrayBuffer, checkBuffer, checkLinear } from "./Devtools.js";
+import devInit, { getRandomInt, buildArrayBuffer, checkBuffer, getByteSize } from "./Devtools.js";
 // devInit();
 //
 // using idb as binary file saving.
@@ -19,198 +19,84 @@ const MINIMUN_WRITE_INTERVAL = 100; // ms
 
 export class IDBFile {
   constructor(fullPath, db) {
-    this._file = {
-      fullPath,
-      blob: new Blob([]),
-      blobOffset: 0,
-    };
+    this.blobs = [];
+    this.blobOffset = 0;
     this.lastModifiedDate = Date.now() - 500;
-    this.chunkSeq = 0;
-    this.key = this._file.fullPath + ":" + this.chunkSeq;
 
-    this.idbdb = db;
-    this.lastWrite;
+    this.fullPath = fullPath;
+    this.chunkSeq = 0;
+    this.key = this.getKey(this.chunkSeq);
+
+    this.db = db;
   }
 
-  queuedBlobs = [];
-  enterCount = 0;
-  writeDelayed2 = async (blob) => {
-    this.queuedBlobs.push(blob);
-
-    if (Date.now() - this.lastModifiedDate >= MINIMUN_WRITE_INTERVAL) {
-      this._file.blob = new Blob([this._file.blob, ...this.queuedBlobs], { type: BLOB_TYPE });
-      this.queuedBlobs = [];
-      this.lastModifiedDate = Date.now();
-
-      ++this.enterCount;
-      console.debug(
-        `enter${this.enterCount - this.exitCount}: offset=${this._file.blobOffset}, size=${this._file.blob.size}, seq=${
-          this.enterCount
-        }`
-      );
-      await this.idbdb.put(this._file, this.key, this._nextChunk2); // ok();
-    }
-  };
-
-  exitCount = 0;
-  _nextChunk2 = async (writtenFile) => {
-    if (writtenFile.blob.size >= MAX_CHUNK_SIZE_) {
-      // make changing where chunk border...
-      // make another writeDelayed2.put.
-      const sleep = (ms) => new Promise((ok, ng) => setTimeout(ok, ms));
-      await sleep(MINIMUN_WRITE_INTERVAL + 100);
-      ++this.exitCount;
-      console.warn(`exit : offset=${this._file.blobOffset}, size=${writtenFile.blob.size}, seq=${this.exitCount}`);
-      //console.assert(this.exitCount === this.enterCount);
-
-      ++this.chunkSeq;
-
-      // remove written blobs from this._file.blob.
-      const addedBlobBetweenWrittingInWebApi = this._file.blob.size - writtenFile.blob.size;
-      if (addedBlobBetweenWrittingInWebApi)
-        console.warn(`addedBlobBetweenWrittingInWebApi = ${addedBlobBetweenWrittingInWebApi}`);
-
-      this._file.blob = this._file.blob.slice(writtenFile.blob.size);
-      this._file.blobOffset += writtenFile.blob.size;
-      this.key = this._file.fullPath + ":" + this.chunkSeq;
-    } else {
-      ++this.exitCount;
-      console.debug(`exit : offset=${this._file.blobOffset}, size=${writtenFile.blob.size}, seq=${this.exitCount}`);
-    }
-  };
-
-  writeDelayed3 = async (blob) => {
-    this.queuedBlobs.push(blob);
-
+  write = async (blob) => {
+    this.blobs.push(blob);
     if (Date.now() - this.lastModifiedDate >= MINIMUN_WRITE_INTERVAL) {
       this.lastModifiedDate = Date.now();
-      this._file.blob = new Blob([this._file.blob, ...this.queuedBlobs], { type: BLOB_TYPE });
-      this.queuedBlobs = [];
+      const chunkBlob = new Blob(this.blobs, { type: BLOB_TYPE });
 
-      const curFile = { ...this._file, blob: this._file.blob.slice() };
-      this.idbdb.put(curFile, this.key, (writtenFile) => {
-        if (writtenFile.blob.size >= MAX_CHUNK_SIZE_) {
+      this.db.putToDB(chunkBlob, this.blobOffset, this.key, (writtenBlob) => {
+        console.log(`${this.key.slice(-3)}: write done: ${writtenBlob.size}`);
+        if (writtenBlob.size >= MAX_CHUNK_SIZE_) {
+          this.blobOffset += writtenBlob.size;
+          this.blobs = [];
           ++this.chunkSeq;
-          console.assert(
-            this._file.blob.size === writtenFile.blob.size,
-            `cursize=${this._file.blob.size}, written=${writtenFile.blob.size}`
-          );
-          this._file.blobOffset += writtenFile.blob.size;
-          this.key = this._file.fullPath + ":" + this.chunkSeq;
-          this._file.blob = new Blob([], { type: BLOB_TYPE });
+          this.key = this.getKey(this.chunkSeq);
         }
       }); // ok();
     }
   };
 
-  writeDelayed = async (blob) => {
-    this._file.blob = new Blob([this._file.blob, blob], { type: BLOB_TYPE });
-    if (Date.now() - this.lastModifiedDate >= MINIMUN_WRITE_INTERVAL) {
-      this.lastModifiedDate = Date.now();
-      this.idbdb.put(this._file, this.key, this._nextChunk); // ok();
+  close = async () => {
+    if (this.blobs.length > 0) {
+      this.lastModifiedDate = 0;
+      await this.write(new Blob());
+      this.blobs = [];
     }
+    console.debug(`write close: ${this.fullPath}, total=${getByteSize(this.blobOffset)}`);
+    this.db = undefined;
   };
 
-  writeTest = async (blob) => {
-    this._file.blob = new Blob([this._file.blob, blob], { type: BLOB_TYPE });
-    this.idbdb.put(this._file, this.key, (written) => {
-      if (this._file.blob.size >= MAX_CHUNK_SIZE_) {
-        ++this.chunkSeq;
-        this.key = this._file.fullPath + ":" + this.chunkSeq;
-        this._file.blobOffset += this._file.blob.size;
-        this._file.blob = new Blob([]);
-      }
-    });
-  };
-
-  newblobs = [];
-  chunkSize = 0;
-  append = async (blob) => {
-    this.newblobs.push(blob);
-
-    if (Date.now() - this.lastModifiedDate < MINIMUN_WRITE_INTERVAL) return;
-    this.lastModifiedDate = Date.now();
-
-    if (this.chunkSize >= MAX_CHUNK_SIZE_) {
-      ++this.chunkSeq;
-      this._file.blobOffset += this.chunkSize;
-      console.debug(`chunk.${this.chunkSeq}, offset=${this._file.blobOffset}`);
-      this.chunkSize = 0;
-    }
-
-    const chunk = {
-      blob: new Blob(this.newblobs, { type: BLOB_TYPE }),
-      blobOffset: this._file.blobOffset,
-      fullPath: this._file.fullPath,
-    };
-    this.newblobs = [];
-    this.chunkSize += chunk.blob.size;
-    const key = this._file.fullPath + ":" + this.chunkSeq;
-
-    await checkLinear(chunk.blob); // check source is valid, i suspect idb write action.
-
-    await this.idbdb.append(chunk, key, (written) => {});
-  };
-
-  write = this.append;
-  close = this.close2;
-
-  close2 = async () => {
-    this.lastWrite = undefined;
-
-    console.log(`write close: ${this._file.fullPath}`);
-
-    if (this.queuedBlobs.length > 0) {
-      this.lastModifiedDate = Date.now();
-      this._file.blob = new Blob([this._file.blob, ...this.queuedBlobs], { type: BLOB_TYPE });
-      this.queuedBlobs = [];
-
-      const curFile = { ...this._file, blob: this._file.blob.slice() };
-      await this.idbdb.put(curFile, this.key, (writtenFile) => {
-        console.log("flushed");
-      });
-    }
-
-    this.idbdb = undefined;
-    console.debug(
-      `write close: ${this._file.fullPath}, total=${getByteSize(this._file.blobOffset + this._file.blob.size)}`
-    );
-  };
-
-  close1 = async () => {
-    console.log(`write close: ${this._file.fullPath}`);
-    // if (this.lastWrite) await this.lastWrite;
-    // console.debug(`write close: ${this._file.fullPath}, all write flushed`);
-
-    // if (this._file.blob.size > 0) {
-    //   await this.idbdb.put(this._file, this.key, this._nextChunk);
-    //   console.debug(`write close: ${this._file.fullPath}, remained data flushed`);
-    // }
-
-    console.debug(
-      `write close: ${this._file.fullPath}, total=${getByteSize(this._file.blobOffset + this._file.blob.size)}`
-    );
-    this.lastWrite = undefined;
-    this.idbdb = undefined;
-  };
-
-  _set = (chunkSeq, _file) => {
+  _set = (chunkSeq, chunk, chunkOffset) => {
     this.chunkSeq = chunkSeq;
-    this.key = this._file.fullPath + ":" + this.chunkSeq;
-    this._file = _file;
+    this.key = this.getKey(this.chunkSeq);
+    this.blobs = [chunk];
+    this.blobOffset = chunkOffset;
     console.debug(this + "");
   };
 
   toString = () => {
-    const totalSize = getByteSize(this._file.blob.size + this._file.blobOffset);
-    const blobSize = getByteSize(this._file.blob.size);
-    return `${this.key}: offset=${this._file.blobOffset}, size=${blobSize}/${totalSize}`;
+    return `${this.key}: offset=${this.blobOffset}, blobSize=${new Blob(this.blobs).size}`;
+  };
+
+  getKey = (n) => {
+    return this.fullPath + ":" + ("00" + this.chunkSeq).slice(-3);
   };
 }
 
 //
 //
 //
+function setuptx(tx, resolve, reject) {
+  const unlisten = () => {
+    tx.removeEventListener("complete", complete);
+    tx.removeEventListener("error", error);
+    tx.removeEventListener("abort", error);
+  };
+  const complete = () => {
+    resolve();
+    unlisten();
+  };
+  const error = () => {
+    reject(tx.error || new DOMException("AbortError", "AbortError"));
+    unlisten();
+  };
+  tx.addEventListener("complete", complete);
+  tx.addEventListener("error", error);
+  tx.addEventListener("abort", error);
+}
+
 export default class IDBBlob {
   constructor() {
     this.db;
@@ -222,7 +108,7 @@ export default class IDBBlob {
 
       if (!db.objectStoreNames.contains(FILE_STORE_)) {
         const store = db.createObjectStore(FILE_STORE_ /*,{keyPath: 'id', autoIncrement: true}*/);
-        store.createIndex("fullPath", "fullPath", { unique: false });
+        //store.createIndex("fullPath", "fullPath", { unique: false });
       }
     };
 
@@ -240,102 +126,29 @@ export default class IDBBlob {
     this.db.close();
   };
 
-  put = (_file, key, done) => {
-    if (_file.blobOffset + _file.blob.size > MAX_FILE_SIZE) {
-      const remained = MAX_FILE_SIZE - _file.blobOffset;
-      _file.blob = _file.blob.slice(0, remained);
-      console.warn(`Reached max file size(${MAX_FILE_SIZE}) for ${_file.fullPath}`);
-    }
-
+  // { chunk, chunkOffset }
+  putToDB = async (chunk, chunkOffset, key, done) => {
     const tx = this.db.transaction([FILE_STORE_], "readwrite");
-    const request = tx.objectStore(FILE_STORE_).put(_file, key);
-    return new Promise((ok, ng) => {
-      tx.onerror = () => ng(request.error);
-      tx.oncomplete = (evt) => {
-        console.debug(
-          "write done:",
-          key,
-          getByteSize(_file.blob.size),
-          getByteSize(_file.blobOffset + _file.blob.size)
-        );
-        done(_file);
-        ok();
-      };
-    });
-  };
-
-  append = async (_file, key, done) => {
-    const tx = this.db.transaction([FILE_STORE_], "readwrite");
-    const store = tx.objectStore(FILE_STORE_);
-
-    // get old if existed
-    const getRequest = store.get(key);
-    const oldBlob = await new Promise((ok, ng) => {
-      getRequest.onsuccess = (evt) => {
-        const old = getRequest.result;
-        ok(old ? old.blob : undefined);
-      };
-    });
-
-    if (old) _file.blob = new Blob([old.blob, _file.blob]); // append blob.
-
-    return new Promise((ok, ng) => {
-      const updateBlobRequest = store.put(_file, key);
-      updateBlobRequest.onsuccess = (evt) => {
-        done(_file);
-        ok();
-      };
-    });
-
-    getRequest.onsuccess = async (evt) => {
-      const old = getRequest.result;
-      if (old) _file.blob = new Blob([old.blob, _file.blob]); // append blob.
-      const updateBlobRequest = store.put(_file, key);
-      updateBlobRequest.onerror = (evt) => {
-        console.error(updateBlobRequest.error);
-        ng(updateBlobRequest.error);
-      };
-
-      updateBlobRequest.onsuccess = (evt) => {
-        done(_file);
-        ok();
-      };
+    const updateBlobRequest = tx.objectStore(FILE_STORE_).put({ chunk, chunkOffset }, key);
+    updateBlobRequest.onsuccess = (evt) => {
+      done(chunk);
     };
 
-    return new Promise((ok, ng) => {
-      const getRequest = store.get(key);
-      getRequest.onerror = (evt) => {
-        console.error(getRequest.error);
-        ng(getRequest.error);
-      };
-      getRequest.onsuccess = async (evt) => {
-        const old = getRequest.result;
-        if (old) _file.blob = new Blob([old.blob, _file.blob]); // append blob.
-        const updateBlobRequest = store.put(_file, key);
-        updateBlobRequest.onerror = (evt) => {
-          console.error(updateBlobRequest.error);
-          ng(updateBlobRequest.error);
-        };
-
-        updateBlobRequest.onsuccess = (evt) => {
-          done(_file);
-          ok();
-        };
-      };
+    await new Promise((ok, ng) => {
+      setuptx(tx, ok, ng);
     });
   };
 
   open = async (fullPath, for_write = true) => {
     if (for_write) {
       const idbfile = new IDBFile(fullPath, this);
-      const chunk = await this.getLastChunk(fullPath);
-      if (chunk) idbfile._set(chunk.chunkSeq, chunk._file);
+      await this.getLastChunk(fullPath, idbfile._set);
       return idbfile;
     } else {
       const idbfile = new IDBFile(fullPath, undefined);
       const chunk = await this.getChunks(fullPath);
       if (!chunk) throw new Error("No data for " + fullPath);
-      idbfile._set(chunk.chunkSeq, chunk._file);
+      idbfile._set(0, chunk, 0);
       return idbfile;
     }
   };
@@ -379,43 +192,51 @@ export default class IDBBlob {
     // -  https://stackoverflow.com/questions/16707499/use-cursor-continue-in-a-callback
   };
 
-  getLastChunk = async (fullPath) => {
-    return new Promise((ok, ng) => {
-      const range = IDBKeyRange.bound(fullPath + ":", fullPath + IDBBlob.nextSep(":"), false, true);
-      const tx = this.db.transaction([FILE_STORE_], "readonly");
-      const request = tx.objectStore(FILE_STORE_).openCursor(range, "prev");
-      request.onerror = () => ng(request.error);
-      request.onsuccess = (evt) => {
-        const cursor = evt.target.result;
-        if (cursor) {
-          const chunkSeq = IDBBlob.getChunkSequence(cursor.primaryKey);
-          ok({ chunkSeq, _file: cursor.value });
-          cursor.advance(99999);
-        } else {
-          ok(undefined);
-        }
-      };
-    });
+  getLastChunk = async (fullPath, setFile) => {
+    const range = IDBKeyRange.bound(fullPath + ":", fullPath + IDBBlob.nextSep(":"), false, true);
+    const tx = this.db.transaction([FILE_STORE_], "readonly");
+    const request = tx.objectStore(FILE_STORE_).openCursor(range, "prev");
+
+    request.onsuccess = (evt) => {
+      const cursor = evt.target.result;
+      if (cursor) {
+        const chunkSeq = IDBBlob.getChunkSequence(cursor.primaryKey);
+        setFile({ chunkSeq, ...cursor.value });
+        cursor.advance(99999);
+      }
+    };
+
+    await new Promise((ok, ng) => setuptx(tx, ok, ng));
   };
 
   getChunks = async (fullPath) => {
-    return new Promise((ok, ng) => {
-      const tx = this.db.transaction([FILE_STORE_], "readonly");
-      const range = IDBKeyRange.bound(fullPath + ":", fullPath + IDBBlob.nextSep(":"), false, true);
-      const request = tx.objectStore(FILE_STORE_).getAll(range);
-      request.onerror = () => ng(request.error);
-      request.onsuccess = () => {
-        const _file = {
-          ...request.result[0],
-          blob: new Blob(
-            request.result.map((v) => v.blob),
-            { type: BLOB_TYPE }
-          ),
-        };
-        ok({ chunkSeq: request.result.length - 1, _file });
-        console.log(request.result);
+    const range = IDBKeyRange.bound(fullPath + ":", fullPath + IDBBlob.nextSep(":"), false, true);
+    const tx = this.db.transaction([FILE_STORE_], "readonly");
+
+    //let chunkBlob;
+    // tx.objectStore(FILE_STORE_).getAll(range).onsuccess = (evt) =>
+    //   (chunkBlob = new Blob(
+    //     evt.target.result.map((v) => v.chunk),
+    //     { type: BLOB_TYPE }
+    //   ));
+
+    await new Promise((ok, ng) => {
+      let blobs = [];
+      tx.objectStore(FILE_STORE_).openCursor(range).onsuccess = (evt) => {
+        const cursor = evt.target.result;
+        if (cursor) {
+          console.log(
+            `read: ${cursor.key.substr(-4)}, offset=${cursor.value.chunkOffset}, size=${cursor.value.chunk.size}`
+          );
+          blobs.push(cursor.value.chunk);
+          cursor.continue();
+        } else {
+          ok(new Blob(blobs, { type: BLOB_TYPE }));
+        }
       };
     });
+
+    //await new Promise((ok, ng) => setuptx(tx, () => ok(chunkBlob), ng));
   };
 
   // return list of files in idb.
@@ -492,13 +313,6 @@ export default class IDBBlob {
     };
   }
 } // class IDBBlob
-
-const getByteSize = (n) => {
-  if (n < 1024) return n + " B";
-  if (n < 1024 * 1024) return (n / 1024).toFixed(2) + " KB";
-  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(2) + " MB";
-  return (n / 1024 / 1024 / 1024).toFixed(2) + " GB";
-};
 
 if (window.IDBBlobTest) {
   //import DnDFileController from "./dnd.js";
@@ -587,7 +401,7 @@ if (window.IDBBlobTest) {
     clearInterval(writeInterval);
     writeInterval = undefined;
 
-    await fileWriter.close2();
+    await fileWriter.close();
     fileWriter = undefined;
 
     console.log(`writeSeed=${writeSeed}`);
@@ -632,13 +446,22 @@ if (window.IDBBlobTest) {
   // read file
   //
   setHandler(`<button>READ FILE</button>`, async (evt) => {
-    const path = document.querySelector("#fs-path").value;
-    //document.querySelector("#fs-path").value = "";
+    let path = document.querySelector("#fs-path").value;
+    if (path.length < 3) {
+      path = "/folder1/rec-11.20.2020, 3.31.37 PM.bin";
+      document.querySelector("#fs-path").value = path;
+    }
 
-    stopWriter();
+    await stopWriter();
+
+    const blob = await idbdb.getChunks(path);
+    console.log("readblob: ", blob?.size);
+    if (blob && (await checkBuffer(blob))) console.log("verified");
+    return;
+
     const datafile = await idbdb.open(path, false);
     console.log("[read]", datafile, "done");
-    if (await checkBuffer(datafile._file.blob, 0)) console.log("verified");
+    if (await checkBuffer(new Blob(datafile.blobs))) console.log("verified");
   });
 
   //
