@@ -59,6 +59,26 @@ class BlobIDB {
     //return new Promise((resolve, reject) => setuptx(tx, resolve, reject));
   };
 
+  getLastChunk = (fullPath, onLastChunk) => {
+    const range = IDBKeyRange.bound(fullPath + ":", fullPath + nextChar(":"), false, true);
+
+    const tx = this.idb.transaction([FILE_STORE_], "readonly");
+    var request = tx.objectStore(FILE_STORE_).openCursor(range, "prev");
+    request.onsuccess = (event) => {
+      const cursor = event.target.result;
+      if (cursor) {
+        const chunkSeq = Number(cursor.key.slice(-3));
+        const blob = cursor.value.blob;
+        const blobOffset = cursor.value.blobOffset;
+
+        onLastChunk(chunkSeq, blob, blobOffset);
+        cursor.advance(999);
+      }
+    };
+
+    return new Promise((resolve, reject) => setuptx(tx, resolve, reject));
+  };
+
   getBlob = (fullPath) => {
     return new Promise((resolve, reject) => {
       const range = IDBKeyRange.bound(fullPath + ":", fullPath + nextChar(":"), false, true);
@@ -154,6 +174,15 @@ function BlobWriter(fullPath, db) {
   this.tickWritten = Date.now();
   this.chunkSeq = 0;
   this.chunkOffset = 0;
+
+  // get previous data.
+  // TODO: await is needed?
+  db.getLastChunk(fullPath, (chunkSeq, blob, blobOffset) => {
+    this.chunkSeq = chunkSeq;
+    this.blobs.push(blob);
+    this.chunkOffset = blobOffset;
+    console.debug(`BlobWriter: ${fullPath}, last chunk: seed=${chunkSeq}, blob=${blob.size}, blobOffset=${blobOffset}`);
+  });
 
   this.write = async (blob) => {
     this.blobs.push(blob);
@@ -252,6 +281,8 @@ if (window.IDBBlobTest) {
 
     const writeInterval = setInterval(() => {
       let n = getRandomInt((5000 / 8) * 30 - 4096, (5000 / 8) * 30);
+      n -= n % 256; // align 256.
+
       if (!writer) clearInterval(writeInterval);
       else {
         const chunk = testBlob.slice(offset, offset + n);
@@ -266,15 +297,15 @@ if (window.IDBBlobTest) {
     }, SEND_INTERVAL);
   });
 
-  setHandler(`<button>STOP WRITE and DIR</button>`, async (evt) => {
+  setHandler(`<button>STOP WRITE and READ</button>`, async (evt) => {
     await writer?.close(); // it means un-expected stop(lik closing browser tab).
     writer = undefined;
-    document.querySelector("#dir").click();
+    document.querySelector("#read").click();
   });
   //
   // read file
   //
-  setHandler(`<button>READ FILE</button>`, async (evt) => {
+  setHandler(`<button id='read'>READ FILE</button>`, async (evt) => {
     const path = document.querySelector("#fs-path").value;
     if (path.length < 3) return;
     document.querySelector("#fs-path").value = "";
