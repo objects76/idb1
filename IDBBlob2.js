@@ -9,7 +9,7 @@ const MAX_FILE_SIZE_ = 512 * 1024 * 1024;
 const BLOB_TYPE = "application/octet-stream";
 const MINIMUN_WRITE_INTERVAL = 100; // ms
 
-//window.indexedDB = window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB;
+if (!window.indexedDB) window.indexedDB = window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB;
 window.IDBTransaction = window.IDBTransaction || window.webkitIDBTransaction || window.msIDBTransaction;
 window.IDBKeyRange = window.IDBKeyRange || window.webkitIDBKeyRange || window.msIDBKeyRange;
 
@@ -31,14 +31,15 @@ class BlobIDB {
       console.log(`'${FILE_DB_}' is opened`);
     };
   }
-  closeDB = () => {
+  close = () => {
     this.idb.close();
     this.idb = undefined;
   };
-  drop = () => {
-    const request = window.indexedDB.deleteDatabase(FILE_DB_);
-    request.onsuccess = (evt) => console.log(`${FILE_DB_} successfully cleared and dropped`);
-    request.onerror = (evt) => console.error(`${FILE_DB_} error when drop database`);
+  static drop = (dbname) => {
+    dbname = dbname || FILE_DB_;
+    const request = window.indexedDB.deleteDatabase(dbname);
+    request.onsuccess = (evt) => console.log(`${dbname} successfully deleted`);
+    request.onerror = (evt) => console.error(`${dbname} error when delete database`);
     this.idb = undefined;
   };
 
@@ -97,6 +98,28 @@ class BlobIDB {
     });
   };
 
+  // delete file
+  delete = async (folder) => {
+    const tx = this.idb.transaction([FILE_STORE_], "readwrite");
+    const range = IDBKeyRange.bound(folder + ":", folder + nextChar(":"), false, true);
+    tx.objectStore(FILE_STORE_).delete(range);
+    return new Promise((resolve, reject) => {
+      setuptx(tx, resolve, reject);
+    });
+  };
+
+  exist = async (fullPath) => {
+    const tx = this.idb.transaction([FILE_STORE_], "readonly");
+    const request = tx.objectStore(FILE_STORE_).get(getKey(fullPath, 0));
+
+    let existed = false;
+    request.onsuccess = (evt) => (existed = !!evt.target.result);
+
+    return new Promise((resolve, reject) => {
+      setuptx(tx, () => resolve(existed), reject);
+    });
+  };
+
   rmdir = async (folder) => {
     const tx = this.idb.transaction([FILE_STORE_], "readwrite");
     if (folder) {
@@ -111,6 +134,7 @@ class BlobIDB {
       setuptx(tx, resolve, reject);
     });
   };
+
   // return list of files in idb.
   dir = async (folder) => {
     let range;
@@ -139,37 +163,15 @@ class BlobIDB {
       setuptx(tx, () => resolve(pathlist), reject);
     });
   };
-
-  // upload a fileblob
-  upload = async (fileblob, toFolder) => {
-    if (!toFolder.endsWith("/")) toFolder += "/";
-    const fullPath = toFolder + fileblob.name;
-    const key = getKey(fullPath, 0);
-    this.put(fileblob, 0, key);
-    console.log(key, "is uploaded");
-  };
 } // class BlobDB
 
 function setuptx(tx, resolve, reject) {
-  const unlisten = () => {
-    tx.removeEventListener("complete", complete);
-    tx.removeEventListener("error", error);
-    tx.removeEventListener("abort", error);
-  };
-  const complete = () => {
-    resolve();
-    unlisten();
-  };
-  const error = () => {
-    reject(tx.error || new DOMException("AbortError", "AbortError"));
-    unlisten();
-  };
-  tx.addEventListener("complete", complete);
-  tx.addEventListener("error", error);
-  tx.addEventListener("abort", error);
+  tx.oncomplete = () => resolve();
+  tx.onerror = () => reject(tx.error || new DOMException("AbortError", "AbortError"));
+  tx.onabort = () => reject(tx.error || new DOMException("AbortError", "AbortError"));
 }
 
-function BlobWriter(fullPath, db) {
+function BlobWriter(fullPath, db, append = true) {
   this.blobs = [];
   this.tickWritten = Date.now();
   this.chunkSeq = 0;
@@ -177,12 +179,18 @@ function BlobWriter(fullPath, db) {
 
   // get previous data.
   // TODO: await is needed?
-  db.getLastChunk(fullPath, (chunkSeq, blob, blobOffset) => {
-    this.chunkSeq = chunkSeq;
-    this.blobs.push(blob);
-    this.chunkOffset = blobOffset;
-    console.debug(`BlobWriter: ${fullPath}, last chunk: seed=${chunkSeq}, blob=${blob.size}, blobOffset=${blobOffset}`);
-  });
+  if (append) {
+    db.getLastChunk(fullPath, (chunkSeq, blob, blobOffset) => {
+      this.chunkSeq = chunkSeq;
+      this.blobs.push(blob);
+      this.chunkOffset = blobOffset;
+      console.debug(
+        `BlobWriter: ${fullPath}, last chunk: seed=${chunkSeq}, blob=${blob.size}, blobOffset=${blobOffset}`
+      );
+    });
+  } else {
+    db.delete(fullPath);
+  }
 
   this.write = async (blob) => {
     this.blobs.push(blob);
@@ -202,11 +210,9 @@ function BlobWriter(fullPath, db) {
   };
 
   this.close = async () => {
-    if (this.blobs.length) {
-      this.tickWritten = 0;
-      await this.write(new Blob());
-      this.blobs = [];
-    }
+    this.tickWritten = 0;
+    await this.write(new Blob());
+    this.blobs = [];
     console.debug(`${this.fullPath} is closed`);
     db = undefined;
   };
@@ -217,7 +223,9 @@ if (window.IDBBlobTest) {
   window.onload = () => {
     idbdb = new BlobIDB();
   };
-
+  window.onbeforeunload = () => {
+    idbdb.close();
+  };
   //------------------------------------------------------------------------------
   // test: utils for test setup.
   //------------------------------------------------------------------------------
@@ -253,7 +261,10 @@ if (window.IDBBlobTest) {
     `<input type='file' multiple/>`,
     async (evt) => {
       for (const file of evt.target.files) {
-        idbdb.upload(file, "/upload");
+        //idbdb.upload(file, "/upload");
+        writer = new BlobWriter("/upload/" + file.name, idbdb);
+        writer.write(file);
+        writer.close();
       }
     },
     "change"
@@ -345,7 +356,7 @@ if (window.IDBBlobTest) {
 
     const ul = document.querySelector("#ui-dir");
     const htmls = [];
-    htmls.push(`<li>[${new Date().toLocaleString()}]</li>`);
+    htmls.push(`<li>[${path ? path : "/"}, ${new Date().toLocaleString()}]</li>`);
     for (const [path, size] of pathlist) {
       htmls.push(`<li><a href='#${path}'>${path}</a>, size=${size}</li>`);
     }
@@ -354,7 +365,7 @@ if (window.IDBBlobTest) {
   });
 
   //
-  // dir
+  // rmdir
   //
   setHandler(`<button>RMDIR</button>`, async (evt) => {
     let path = document.querySelector("#fs-path").value;
@@ -370,5 +381,15 @@ if (window.IDBBlobTest) {
     evt.stopPropagation();
     evt.preventDefault();
     if (evt.target.hash) document.querySelector("#fs-path").value = window.decodeURI(evt.target.hash.substring(1));
+  });
+
+  //
+  // existed
+  //
+  setHandler(`<button>EXISTED</button>`, async (evt) => {
+    let path = document.querySelector("#fs-path").value;
+    if (path.length < 3) return;
+
+    console.log(path, "=", await idbdb.exist(path));
   });
 }

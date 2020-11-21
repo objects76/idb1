@@ -10,7 +10,7 @@
             "name": "media2idb.html",
             "url": "http://localhost:5500/media2idb.html",
             "webRoot": "${workspaceFolder}",
-            "runtimeArgs": ["-auto-open-devtools-for-tabs"],
+            "runtimeArgs": ["-auto-open-devtools-for-tabs", "--disable-session-crashed-bubble"],
         },
         
         {
@@ -19,7 +19,7 @@
             "name": "idb1.html",
             "url": "http://localhost:5500/idb1.html",
             "webRoot": "${workspaceFolder}",
-            "runtimeArgs": ["-auto-open-devtools-for-tabs"],
+            "runtimeArgs": ["-auto-open-devtools-for-tabs", "--disable-session-crashed-bubble"],
         }
     ]
 }

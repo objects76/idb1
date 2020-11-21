@@ -32,6 +32,10 @@ async function testDevtools() {
     resolve("ok");
   });
 }
+
+export function numberWithCommas(x) {
+  return x.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
 export function getByteSize(n) {
   if (n instanceof Blob) n = n.size;
   if (n < 1024) return n + " B";
