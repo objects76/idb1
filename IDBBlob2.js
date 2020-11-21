@@ -17,7 +17,7 @@ const getKey = (path, seq) => path + ":" + ("00" + seq).slice(-3); // up to (MAX
 const getPath = (key) => key.slice(0, -4);
 const nextChar = (c) => String.fromCharCode(c.charCodeAt(0) + 1);
 
-class BlobIDB {
+export default class BlobIDB {
   constructor() {
     this.idb;
     const request = window.indexedDB.open(FILE_DB_, 1);
@@ -167,11 +167,11 @@ class BlobIDB {
 
 function setuptx(tx, resolve, reject) {
   tx.oncomplete = () => resolve();
-  tx.onerror = () => reject(tx.error || new DOMException("AbortError", "AbortError"));
-  tx.onabort = () => reject(tx.error || new DOMException("AbortError", "AbortError"));
+  tx.onerror = () => reject(tx.error || new DOMException("IDBError", "IDBError"));
+  tx.onabort = () => reject(tx.error || new DOMException("IDBAbort", "IDBAbort"));
 }
 
-function BlobWriter(fullPath, db, append = true) {
+export function BlobWriter(fullPath, db, append = true) {
   this.blobs = [];
   this.tickWritten = Date.now();
   this.chunkSeq = 0;
@@ -192,9 +192,13 @@ function BlobWriter(fullPath, db, append = true) {
     db.delete(fullPath);
   }
 
-  this.write = async (blob) => {
+  this.write = async (blob, delayed = MINIMUN_WRITE_INTERVAL) => {
+    if (!db) {
+      console.warn("invalid db reference");
+      return;
+    }
     this.blobs.push(blob);
-    if (Date.now() - this.tickWritten < MINIMUN_WRITE_INTERVAL) return;
+    if (Date.now() - this.tickWritten < delayed) return;
     this.tickWritten = Date.now();
 
     const blobJoined = new Blob(this.blobs, { type: BLOB_TYPE });
@@ -210,8 +214,7 @@ function BlobWriter(fullPath, db, append = true) {
   };
 
   this.close = async () => {
-    this.tickWritten = 0;
-    await this.write(new Blob());
+    await this.write(new Blob(), 0);
     this.blobs = [];
     console.debug(`${this.fullPath} is closed`);
     db = undefined;
