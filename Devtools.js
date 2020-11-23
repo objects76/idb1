@@ -4,8 +4,8 @@ export default function devInit(...args) {
   // replace assert
   console.assert = (c, ...msgs) => {
     if (!c) {
-      const output = msgs.length ? msgs.join(", ") : "Assertion failed";
-      window.alert(output);
+      const output = msgs.length ? msgs.join(", ") : "";
+      window.alert("ASSERTION FAILED:\n" + output);
       throw new Error(output);
     }
   };
@@ -19,18 +19,6 @@ export function getRandomInt(min, max) {
   min = Math.ceil(min);
   max = Math.floor(max);
   return Math.floor(Math.random() * (max - min)) + min;
-}
-
-async function testDevtools() {
-  return new Promise((resolve, reject) => {
-    console.log("getRandomInt(10, 20) test: 10,11,12, ...19");
-    for (let i = 0; i < 99999999; ++i) {
-      const n = getRandomInt(10, 20);
-      if (n < 10 || n >= 20) reject(`invalid random value: ${n}`);
-      if (i % 1000 === 0) console.log(`try: ${i}`);
-    }
-    resolve("ok");
-  });
 }
 
 export function numberWithCommas(x) {
@@ -101,3 +89,42 @@ export async function getAt(buf, idx) {
     throw new Error("invalid buffer type");
   }
 }
+
+//
+// html
+//
+export const addTestWidget = (element, callback = undefined, eventName = "click") => {
+  if (!document.querySelector("#test-buttons")) {
+    document.body.insertAdjacentHTML("beforeend", `<div id='test-buttons' style="width: 100%"></div>`);
+    document.head.insertAdjacentHTML(
+      "beforeend",
+      `<style>
+      #test-buttons
+      button, input {
+          display: block;
+          width: 20rem;
+          margin: 0.5em auto;
+          box-sizing: border-box;
+        }
+    </style>`
+    );
+  }
+  document.querySelector("#test-buttons").insertAdjacentHTML("beforeend", element);
+
+  if (!callback) return;
+
+  const el = document.querySelector("#test-buttons").querySelector(":last-child");
+  if (el) el.addEventListener(eventName, callback);
+  else console.error(`no element for <${element}>`);
+};
+
+//
+// download blob
+//
+export const downloadBlob = (blob) => {
+  const link = document.createElement("a");
+  link.download = path;
+  link.href = window.URL.createObjectURL(blob);
+  link.click();
+  window.URL.revokeObjectURL(link.href); // jjkim
+};

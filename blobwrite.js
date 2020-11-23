@@ -1,5 +1,5 @@
 "use strict";
-import devInit, { getRandomInt, getTestBlob, verifyTestBlob, getByteSize } from "./Devtools.js";
+import devInit, { getRandomInt, getTestBlob, verifyTestBlob, getByteSize, addTestWidget } from "./Devtools.js";
 devInit();
 
 let idbdb;
@@ -51,27 +51,6 @@ async function appendBlobIntoIdb(blob, key, done) {
   const tx = idbdb.transaction([FILE_STORE_], "readwrite");
   const store = tx.objectStore(FILE_STORE_);
 
-  // // get old if existed
-  // const oldBlob = await new Promise((ok, ng) => {
-  //   const getRequest = store.get(key);
-  //   getRequest.onsuccess = (evt) => {
-  //     const old = getRequest.result;
-  //     ok(old ? old : undefined);
-  //   };
-  // });
-
-  // if (oldBlob) blob = new Blob([oldBlob, blob], { type: BLOB_TYPE }); // append blob.
-
-  // await new Promise((ok, ng) => {
-  //   ++appendTry;
-  //   // https://developer.mozilla.org/en-US/docs/Web/API/IDBObjectStore/put
-  //   const updateBlobRequest = store.put(blob, key);
-  //   updateBlobRequest.onsuccess = () => {
-  //     if (updateBlobRequest.error) console.error("put:", updateBlobRequest.error);
-  //     done(blob);
-  //     ok();
-  //   };
-  // });
   const getRequest = store.get(key);
   getRequest.onsuccess = (evt) => {
     const oldBlob = getRequest.result;
@@ -248,35 +227,11 @@ if (window.IDBBlobTest) {
   //------------------------------------------------------------------------------
   // test: utils for test setup.
   //------------------------------------------------------------------------------
-  document.body.insertAdjacentHTML("beforeend", `<div id='test-buttons' style="width: 100%"></div>`);
-  document.head.insertAdjacentHTML(
-    "beforeend",
-    `<style>
-    #test-buttons
-    button, input {
-        display: block;
-        width: 20rem;
-        margin: 0.5em auto;
-        box-sizing: border-box;
-      }
-  </style>`
-  );
-
-  const setHandler = (element, callback = undefined, eventName = "click") => {
-    document.querySelector("#test-buttons").insertAdjacentHTML("beforeend", element);
-
-    if (!callback) return;
-
-    const el = document.querySelector("#test-buttons").querySelector(":last-child");
-    if (el) el.addEventListener(eventName, callback);
-    else console.error(`no element for <${element}>`);
-  };
-
   //------------------------------------------------------------------------------
   // test
   //------------------------------------------------------------------------------
 
-  setHandler(
+  addTestWidget(
     `<input type='file' multiple/>`,
     async (evt) => {
       stopWriter();
@@ -288,12 +243,12 @@ if (window.IDBBlobTest) {
     },
     "change"
   );
-  setHandler(`<button>reopen idb</button>`, async (evt) => {
+  addTestWidget(`<button>reopen idb</button>`, async (evt) => {
     idbdb.closeDB();
     idbdb = new IDBBlob();
   });
 
-  setHandler(`<hr/><input id='fs-path'></input>`);
+  addTestWidget(`<hr/><input id='fs-path'></input>`);
 
   //
   // write
@@ -310,7 +265,7 @@ if (window.IDBBlobTest) {
     return true;
   };
 
-  setHandler(`<button>WRITE FILE</button>`, async (evt) => {
+  addTestWidget(`<button>WRITE FILE</button>`, async (evt) => {
     if (writeInterval) return;
 
     let path = document.querySelector("#fs-path").value;
@@ -336,13 +291,13 @@ if (window.IDBBlobTest) {
     }, SEND_INTERVAL);
   });
 
-  setHandler(`<button>STOP WRITE FILE</button>`, async (evt) => {
+  addTestWidget(`<button>STOP WRITE FILE</button>`, async (evt) => {
     stopWriter();
   });
   //
   // read file
   //
-  setHandler(`<button>READ FILE</button>`, async (evt) => {
+  addTestWidget(`<button>READ FILE</button>`, async (evt) => {
     stopWriter();
     const path = document.querySelector("#fs-path").value;
     if (path.length < 3) return;
@@ -358,7 +313,7 @@ if (window.IDBBlobTest) {
   //
   function downloadBlob(blob, destName) {}
 
-  setHandler(`<button>DOWNLOAD</button>`, async (evt) => {
+  addTestWidget(`<button>DOWNLOAD</button>`, async (evt) => {
     stopWriter();
     const path = document.querySelector("#fs-path").value;
     if (path.length < 3) return;

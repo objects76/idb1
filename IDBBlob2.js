@@ -1,5 +1,12 @@
 "use strict";
-import devInit, { getRandomInt, getTestBlob, verifyTestBlob, getByteSize } from "./Devtools.js";
+import devInit, {
+  getRandomInt,
+  getTestBlob,
+  verifyTestBlob,
+  getByteSize,
+  addTestWidget,
+  downloadBlob,
+} from "./Devtools.js";
 devInit();
 
 const FILE_DB_ = "blob.test.db";
@@ -53,7 +60,7 @@ export default class BlobIDB {
     }
     console.debug(`[db.write] ${key}, ${blob.size}, offset=${blobOffset}`);
 
-    const tx = this.idb.transaction([FILE_STORE_], "readwrite");
+    const tx = this.idb.transaction([FILE_STORE_], "readwrite", { durability: "relaxed" });
     const request = tx.objectStore(FILE_STORE_).put({ blob, blobOffset }, key);
     request.onsuccess = (evt) => console.debug(`${evt.target.result} done for ${key}`);
 
@@ -163,6 +170,57 @@ export default class BlobIDB {
       setuptx(tx, () => resolve(pathlist), reject);
     });
   };
+
+  // writer class
+  static BlobWriter = function (fullPath, db, append = true) {
+    this.blobs = [];
+    this.tickWritten = Date.now();
+    this.chunkSeq = 0;
+    this.chunkOffset = 0;
+
+    // get previous data.
+    // TODO: await is needed?
+    if (append) {
+      db.getLastChunk(fullPath, (chunkSeq, blob, blobOffset) => {
+        this.chunkSeq = chunkSeq;
+        this.blobs.push(blob);
+        this.chunkOffset = blobOffset;
+        console.debug(
+          `BlobWriter: ${fullPath}, last chunk: seed=${chunkSeq}, blob=${blob.size}, blobOffset=${blobOffset}`
+        );
+      });
+    } else {
+      db.delete(fullPath);
+    }
+
+    this.write = async (blob, delayed = MINIMUN_WRITE_INTERVAL) => {
+      if (!db) {
+        console.warn("invalid db reference");
+        return;
+      }
+      this.blobs.push(blob);
+      if (Date.now() - this.tickWritten < delayed) return;
+      this.tickWritten = Date.now();
+
+      const blobJoined = new Blob(this.blobs, { type: BLOB_TYPE });
+      const key = getKey(fullPath, this.chunkSeq);
+      const chunkOffset = this.chunkOffset;
+      if (blobJoined.size >= MAX_CHUNK_SIZE_) {
+        ++this.chunkSeq;
+        this.blobs = [];
+        this.chunkOffset += blobJoined.size;
+      }
+
+      db.put(blobJoined, chunkOffset, key);
+    };
+
+    this.close = async () => {
+      await this.write(new Blob(), 0);
+      this.blobs = [];
+      console.debug(`${this.fullPath} is closed`);
+      db = undefined;
+    };
+  }; // BlobWriter
 } // class BlobDB
 
 function setuptx(tx, resolve, reject) {
@@ -171,114 +229,34 @@ function setuptx(tx, resolve, reject) {
   tx.onabort = () => reject(tx.error || new DOMException("IDBAbort", "IDBAbort"));
 }
 
-export function BlobWriter(fullPath, db, append = true) {
-  this.blobs = [];
-  this.tickWritten = Date.now();
-  this.chunkSeq = 0;
-  this.chunkOffset = 0;
-
-  // get previous data.
-  // TODO: await is needed?
-  if (append) {
-    db.getLastChunk(fullPath, (chunkSeq, blob, blobOffset) => {
-      this.chunkSeq = chunkSeq;
-      this.blobs.push(blob);
-      this.chunkOffset = blobOffset;
-      console.debug(
-        `BlobWriter: ${fullPath}, last chunk: seed=${chunkSeq}, blob=${blob.size}, blobOffset=${blobOffset}`
-      );
-    });
-  } else {
-    db.delete(fullPath);
-  }
-
-  this.write = async (blob, delayed = MINIMUN_WRITE_INTERVAL) => {
-    if (!db) {
-      console.warn("invalid db reference");
-      return;
-    }
-    this.blobs.push(blob);
-    if (Date.now() - this.tickWritten < delayed) return;
-    this.tickWritten = Date.now();
-
-    const blobJoined = new Blob(this.blobs, { type: BLOB_TYPE });
-    const key = getKey(fullPath, this.chunkSeq);
-    const chunkOffset = this.chunkOffset;
-    if (blobJoined.size >= MAX_CHUNK_SIZE_) {
-      ++this.chunkSeq;
-      this.blobs = [];
-      this.chunkOffset += blobJoined.size;
-    }
-
-    db.put(blobJoined, chunkOffset, key);
-  };
-
-  this.close = async () => {
-    await this.write(new Blob(), 0);
-    this.blobs = [];
-    console.debug(`${this.fullPath} is closed`);
-    db = undefined;
-  };
-} // BlobWriter
-
 if (window.IDBBlobTest) {
   let idbdb;
   window.onload = () => {
     idbdb = new BlobIDB();
   };
-  window.onbeforeunload = () => {
-    idbdb.close();
-  };
   //------------------------------------------------------------------------------
   // test: utils for test setup.
   //------------------------------------------------------------------------------
-  document.body.insertAdjacentHTML("beforeend", `<div id='test-buttons' style="width: 100%"></div>`);
-  document.head.insertAdjacentHTML(
-    "beforeend",
-    `<style>
-    #test-buttons
-    button, input {
-        display: block;
-        width: 20rem;
-        margin: 0.5em auto;
-        box-sizing: border-box;
-      }
-  </style>`
-  );
-
-  const setHandler = (element, callback = undefined, eventName = "click") => {
-    document.querySelector("#test-buttons").insertAdjacentHTML("beforeend", element);
-
-    if (!callback) return;
-
-    const el = document.querySelector("#test-buttons").querySelector(":last-child");
-    if (el) el.addEventListener(eventName, callback);
-    else console.error(`no element for <${element}>`);
-  };
-
-  //------------------------------------------------------------------------------
-  // test
-  //------------------------------------------------------------------------------
   const SEND_INTERVAL = 0; // ms
-  setHandler(
+  addTestWidget(
     `<input type='file' multiple/>`,
     async (evt) => {
       for (const file of evt.target.files) {
         //idbdb.upload(file, "/upload");
-        writer = new BlobWriter("/upload/" + file.name, idbdb);
+        writer = new BlobIDB.BlobWriter("/upload/" + file.name, idbdb);
         writer.write(file);
         writer.close();
       }
     },
     "change"
   );
-  setHandler(`<hr/><input id='fs-path'></input>`);
+  addTestWidget(`<hr/><input id='fs-path'></input>`);
 
   //
   // write
   //
   let writer;
-  setHandler(`<button>WRITE FILE</button>`, async (evt) => {
+  addTestWidget(`<button>WRITE FILE</button>`, async (evt) => {
     if (writer) return;
 
     let path = document.querySelector("#fs-path").value;
@@ -287,7 +265,7 @@ if (window.IDBBlobTest) {
       document.querySelector("#fs-path").value = path;
     }
 
-    writer = new BlobWriter(path, idbdb);
+    writer = new BlobIDB.BlobWriter(path, idbdb);
 
     let offset = 0;
     const testBlob = getTestBlob(1024 * 1024 * 15);
@@ -311,7 +289,7 @@ if (window.IDBBlobTest) {
     }, SEND_INTERVAL);
   });
 
-  setHandler(`<button>STOP WRITE and READ</button>`, async (evt) => {
+  addTestWidget(`<button>STOP WRITE and READ</button>`, async (evt) => {
     await writer?.close(); // it means un-expected stop(lik closing browser tab).
     writer = undefined;
     document.querySelector("#read").click();
@@ -319,7 +297,7 @@ if (window.IDBBlobTest) {
   //
   // read file
   //
-  setHandler(`<button id='read'>READ FILE</button>`, async (evt) => {
+  addTestWidget(`<button id='read'>READ FILE</button>`, async (evt) => {
     const path = document.querySelector("#fs-path").value;
     if (path.length < 3) return;
     document.querySelector("#fs-path").value = "";
@@ -332,24 +310,19 @@ if (window.IDBBlobTest) {
   //
   // download
   //
-  setHandler(`<button>DOWNLOAD</button>`, async (evt) => {
+  addTestWidget(`<button>DOWNLOAD</button>`, async (evt) => {
     const path = document.querySelector("#fs-path").value;
     if (path.length < 3) return;
 
     const blob = await idbdb.getBlob(path);
     console.log(`[read] size= ${getByteSize(blob)}`);
-
-    const link = document.createElement("a");
-    link.download = path;
-    link.href = window.URL.createObjectURL(blob);
-    link.click();
-    window.URL.revokeObjectURL(link.href); // jjkim
+    downloadBlob(blob);
   });
 
   //
   // dir
   //
-  setHandler(`<button id='dir'>DIR</button>`, async (evt) => {
+  addTestWidget(`<button id='dir'>DIR</button>`, async (evt) => {
     let path = document.querySelector("#fs-path").value;
     if (path.length < 3) path = undefined;
 
@@ -357,20 +330,19 @@ if (window.IDBBlobTest) {
     console.log("---------------------------------------------------");
     //console.log([...pathlist].join("\n"));
 
-    const ul = document.querySelector("#ui-dir");
     const htmls = [];
     htmls.push(`<li>[${path ? path : "/"}, ${new Date().toLocaleString()}]</li>`);
     for (const [path, size] of pathlist) {
-      htmls.push(`<li><a href='#${path}'>${path}</a>, size=${size}</li>`);
+      htmls.push(`<li><a href='#${path}'>${path}</a>, size=${getByteSize(size)}</li>`);
     }
 
-    ul.innerHTML = htmls.join("\n");
+    document.querySelector("#ui-dir").innerHTML = htmls.join("\n");
   });
 
   //
   // rmdir
   //
-  setHandler(`<button>RMDIR</button>`, async (evt) => {
+  addTestWidget(`<button>RMDIR</button>`, async (evt) => {
     let path = document.querySelector("#fs-path").value;
     if (path.length < 3) path = undefined;
 
@@ -378,21 +350,21 @@ if (window.IDBBlobTest) {
   });
 
   //
-  // file lists
-  //
-  setHandler("<ul id='ui-dir'></ul>", (evt) => {
-    evt.stopPropagation();
-    evt.preventDefault();
-    if (evt.target.hash) document.querySelector("#fs-path").value = window.decodeURI(evt.target.hash.substring(1));
-  });
-
-  //
   // existed
   //
-  setHandler(`<button>EXISTED</button>`, async (evt) => {
+  addTestWidget(`<button>EXISTED</button>`, async (evt) => {
     let path = document.querySelector("#fs-path").value;
     if (path.length < 3) return;
 
     console.log(path, "=", await idbdb.exist(path));
+  });
+
+  //
+  // list ui
+  //
+  addTestWidget("<ul id='ui-dir'></ul>", (evt) => {
+    evt.stopPropagation();
+    evt.preventDefault();
+    if (evt.target.hash) document.querySelector("#fs-path").value = window.decodeURI(evt.target.hash.substring(1));
   });
 }
