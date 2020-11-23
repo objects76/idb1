@@ -1,3 +1,6 @@
+//
+// key optimized indexed db blob saver with tick.
+//
 "use strict";
 import { getRandomInt, getTestBlob, verifyTestBlob, getByteSize, addTestWidget, downloadBlob } from "./Devtools.js";
 
@@ -8,9 +11,15 @@ if (!window.indexedDB) window.indexedDB = window.mozIndexedDB || window.webkitIn
 window.IDBTransaction = window.IDBTransaction || window.webkitIDBTransaction || window.msIDBTransaction;
 window.IDBKeyRange = window.IDBKeyRange || window.webkitIDBKeyRange || window.msIDBKeyRange;
 
-const getKey = (path, seq) => path + ":" + ("00" + seq).slice(-3); // up to (MAX_CHUNK_SIZE_*1000).
-const getPath = (key) => key.slice(0, -4);
-const nextChar = (c) => String.fromCharCode(c.charCodeAt(0) + 1);
+const getKey = (tick, seq) => {
+  console.assert(typeof tick === "number", `tick is ${typeof tick}`);
+  console.assert(typeof seq === "number", `seq is ${typeof seq}`);
+  return tick * 256 + seq;
+};
+const getTick = (key) => {
+  console.assert(typeof key === "number", `key is ${typeof key}`);
+  return Math.floor(key / 256);
+};
 
 const STORE0 = "store0";
 export default class BlobIDB {
@@ -39,36 +48,31 @@ export default class BlobIDB {
   };
 
   put = (blob, blobOffset, key) => {
-    const MAX_FILE_SIZE_ = 512 * 1024 * 1024; // 512MB
-    if (blobOffset + blob.size > MAX_FILE_SIZE_) {
-      const writtableSize = MAX_FILE_SIZE_ - blobOffset;
-      if (writtableSize <= 0) throw new Error(`Can not write data. Maximun file size is ${MAX_FILE_SIZE_}`);
-      console.warn(`Maximun file size is ${MAX_FILE_SIZE_}, writtable size=${writtableSize}`);
-
-      blob = blob.slice(0, writtableSize);
-    }
-    console.debug(`[db.write] ${key}, ${blob.size}, offset=${blobOffset}`);
+    console.debug(`[db.write] ${key.toString(16)}, ${blob.size}, offset=${blobOffset}`);
 
     const tx = this.idb.transaction([STORE0], "readwrite", { durability: "relaxed" });
     const request = tx.objectStore(STORE0).put({ blob, blobOffset }, key);
-    request.onsuccess = (evt) => console.debug(`${evt.target.result} done for ${key}`);
+    request.onsuccess = (evt) => console.debug(`${evt.target.result} done for ${key.toString(16)}`);
 
     //return new Promise((resolve, reject) => setuptx(tx, resolve, reject));
   };
 
-  getLastChunk = (fullPath, onLastChunk) => {
-    const range = IDBKeyRange.bound(fullPath + ":", fullPath + nextChar(":"), false, true);
+  getLastChunk = (tick, onLastChunk) => {
+    tick = Number(tick);
+    const keyLower = getKey(tick, 0);
+    const keyUpper = getKey(tick, 256);
+    const range = IDBKeyRange.bound(keyLower, keyUpper, false, true);
 
     const tx = this.idb.transaction([STORE0], "readonly");
     var request = tx.objectStore(STORE0).openCursor(range, "prev");
     request.onsuccess = (event) => {
       const cursor = event.target.result;
       if (cursor) {
-        const chunkSeq = Number(cursor.key.slice(-3));
+        const chunkKey = cursor.key;
         const blob = cursor.value.blob;
         const blobOffset = cursor.value.blobOffset;
 
-        onLastChunk(chunkSeq, blob, blobOffset);
+        onLastChunk(chunkKey, blob, blobOffset);
         cursor.advance(999);
       }
     };
@@ -76,12 +80,15 @@ export default class BlobIDB {
     return new Promise((resolve, reject) => setuptx(tx, resolve, reject));
   };
 
-  getBlob = (fullPath) => {
+  getBlob = (tick) => {
+    tick = Number(tick);
     return new Promise((resolve, reject) => {
-      const range = IDBKeyRange.bound(fullPath + ":", fullPath + nextChar(":"), false, true);
+      const keyLower = getKey(tick, 0);
+      const keyUpper = getKey(tick, 256);
+      const range = IDBKeyRange.bound(keyLower, keyUpper, false, true);
       const tx = this.idb.transaction([STORE0], "readonly");
       const request = tx.objectStore(STORE0).getAll(range);
-      request.onerror = () => reject(request.error || `Can't read ${fullPath}`);
+      request.onerror = () => reject(request.error || `Can't read ${tick}`);
       request.onsuccess = () => {
         console.debug(`all blobs = #${request.result.length}`);
         resolve(
@@ -95,18 +102,27 @@ export default class BlobIDB {
   };
 
   // delete file
-  delete = async (folder) => {
+  delete = async (tickStart, tickEnd) => {
+    let range = undefined;
+    if (tickStart) {
+      tickStart = Number(tickStart);
+      tickEnd = tickEnd ? Number(tickEnd) : tickStart;
+      const keyLower = getKey(tickStart, 0);
+      const keyUpper = getKey(tickEnd, 256);
+      range = IDBKeyRange.bound(keyLower, keyUpper, false, true);
+    }
+
     const tx = this.idb.transaction([STORE0], "readwrite");
-    const range = IDBKeyRange.bound(folder + ":", folder + nextChar(":"), false, true);
     tx.objectStore(STORE0).delete(range);
     return new Promise((resolve, reject) => {
       setuptx(tx, resolve, reject);
     });
   };
 
-  exist = async (fullPath) => {
+  exist = async (tick) => {
+    tick = Number(tick);
     const tx = this.idb.transaction([STORE0], "readonly");
-    const request = tx.objectStore(STORE0).get(getKey(fullPath, 0));
+    const request = tx.objectStore(STORE0).get(getKey(tick, 0));
 
     let existed = false;
     request.onsuccess = (evt) => (existed = !!evt.target.result);
@@ -116,40 +132,25 @@ export default class BlobIDB {
     });
   };
 
-  rmdir = async (folder) => {
-    const tx = this.idb.transaction([STORE0], "readwrite");
-    if (folder) {
-      if (folder.endsWith("/")) folder = folder.slice(0, -1);
-      const range = IDBKeyRange.bound(folder + "/", folder + nextChar("/"), false, true);
-      tx.objectStore(STORE0).delete(range);
-    } else {
-      tx.objectStore(STORE0).clear();
-    }
-
-    return new Promise((resolve, reject) => {
-      setuptx(tx, resolve, reject);
-    });
-  };
-
   // return list of files in idb.
-  dir = async (folder) => {
-    let range;
-    if (folder) {
-      if (folder.endsWith("/")) folder = folder.slice(0, -1);
-      range = IDBKeyRange.bound(folder + "/", folder + nextChar("/"), false, true);
+  dir = async (tickStart = undefined, tickEnd = undefined) => {
+    let range = undefined;
+    if (tickStart) {
+      const keyLower = getKey(Number(tickStart), 0);
+      const keyUpper = getKey(tickEnd ? Number(tickEnd) : Date.now(), 256);
+      range = IDBKeyRange.bound(keyLower, keyUpper, false, true);
     }
 
     const tx = this.idb.transaction([STORE0], "readonly");
-
     var request = tx.objectStore(STORE0).openCursor(range, "prev");
     const pathlist = new Map();
     request.onsuccess = (event) => {
       const cursor = event.target.result;
       if (cursor) {
-        const fullPath = getPath(cursor.key);
-        if (!pathlist.get(fullPath)) {
+        const tick = getTick(cursor.key);
+        if (!pathlist.get(tick)) {
           const size = cursor.value.blobOffset + cursor.value.blob.size;
-          pathlist.set(fullPath, size);
+          pathlist.set(tick, size);
         }
         cursor.continue();
       }
@@ -162,33 +163,34 @@ export default class BlobIDB {
 
   // writer class
   static BlobWriter = class {
-    constructor(fullPath, db, append = true) {
-      console.assert(db && fullPath, `${db}, ${fullPath}`);
-      this.db = db;
+    constructor(db, tick = undefined, append = true) {
+      console.assert(db, `${db}`);
+      this.dbWrapper = db;
       this.blobs = [];
       this.tickWritten = Date.now();
-      this.chunkSeq = 0;
+      this.key = getKey(tick ? Number(tick) : Date.now(), 0);
       this.chunkOffset = 0;
-      this.fullPath = fullPath;
 
       // get previous data.
       // TODO: await is needed?
       if (append) {
-        this.db.getLastChunk(fullPath, (chunkSeq, blob, blobOffset) => {
-          this.chunkSeq = chunkSeq;
+        this.dbWrapper.getLastChunk(tick, (chunkKey, blob, blobOffset) => {
+          this.key = chunkKey;
           this.blobs.push(blob);
           this.chunkOffset = blobOffset;
           console.debug(
-            `BlobWriter: ${fullPath}, last chunk: seed=${chunkSeq}, blob=${blob.size}, blobOffset=${blobOffset}`
+            `BlobWriter: ${tick.toString(16)}, last chunk: key=${chunkKey.toString(16)}, blob=${
+              blob.size
+            }, blobOffset=${blobOffset}`
           );
         });
       } else {
-        this.db.delete(fullPath);
+        this.dbWrapper.delete(tick);
       }
     }
 
     write = async (blob, delayed = 100) => {
-      if (!this.db) {
+      if (!this.dbWrapper) {
         console.warn("BlobWriter is closed.");
         return;
       }
@@ -197,22 +199,26 @@ export default class BlobIDB {
       this.tickWritten = Date.now();
 
       const blobJoined = new Blob(this.blobs, { type: BLOB_TYPE_ });
-      const key = getKey(this.fullPath, this.chunkSeq);
+      const key = this.key;
       const chunkOffset = this.chunkOffset;
       if (blobJoined.size >= MAX_CHUNK_SIZE_) {
-        ++this.chunkSeq;
+        ++this.key;
         this.blobs = [];
         this.chunkOffset += blobJoined.size;
+        if ((this.key & 0xff) === 0) {
+          console.warn(`Write reached to maximum file size.`);
+          this.close();
+        }
       }
 
-      this.db.put(blobJoined, chunkOffset, key);
+      this.dbWrapper.put(blobJoined, chunkOffset, key);
     };
 
     close = async () => {
       await this.write(new Blob(), 0);
       this.blobs = [];
-      console.debug(`${this.fullPath} is closed, last chunk is ${this.chunkSeq}`);
-      this.db = undefined;
+      console.debug(`${this.key} is closed, last chunk is ${this.key & 0xff}`);
+      this.dbWrapper = undefined;
     };
   }; // BlobWriter
 } // class BlobIDB
@@ -245,7 +251,7 @@ if (window.IDBBlobTest) {
     async (evt) => {
       for (const file of evt.target.files) {
         //idbdb.upload(file, "/upload");
-        writer = new BlobIDB.BlobWriter("/upload/" + file.name, idbdb);
+        writer = new BlobIDB.BlobWriter(idbdb);
         writer.write(file);
         writer.close();
       }
@@ -261,13 +267,13 @@ if (window.IDBBlobTest) {
   addTestWidget(`<button>WRITE FILE</button>`, async (evt) => {
     if (writer) return;
 
-    let path = document.querySelector("#fs-path").value;
-    if (path.length < 3) {
-      path = `/test/rec-${new Date().toLocaleString().replace(/[/:]/g, ".")}.bin`;
-      document.querySelector("#fs-path").value = path;
+    let tick = document.querySelector("#fs-path").value;
+    if (tick.length < 3) {
+      tick = Date.now();
+      document.querySelector("#fs-path").value = tick;
     }
 
-    writer = new BlobIDB.BlobWriter(path, idbdb);
+    writer = new BlobIDB.BlobWriter(idbdb, tick);
 
     let offset = 0;
     const testBlob = getTestBlob(1024 * 1024 * 150);
@@ -300,7 +306,7 @@ if (window.IDBBlobTest) {
   // read file
   //
   addTestWidget(`<button id='read'>VERIFY FILE</button>`, async (evt) => {
-    const path = document.querySelector("#fs-path").value;
+    let path = document.querySelector("#fs-path").value;
     if (path.length < 3) return;
     document.querySelector("#fs-path").value = "";
 
@@ -313,7 +319,7 @@ if (window.IDBBlobTest) {
   // download
   //
   addTestWidget(`<button>DOWNLOAD</button>`, async (evt) => {
-    const path = document.querySelector("#fs-path").value;
+    let path = document.querySelector("#fs-path").value;
     if (path.length < 3) return;
 
     const blob = await idbdb.getBlob(path);
@@ -330,25 +336,15 @@ if (window.IDBBlobTest) {
 
     const pathlist = await idbdb.dir(path);
     console.log("---------------------------------------------------");
-    //console.log([...pathlist].join("\n"));
+    console.log([...pathlist].join("\n"));
 
     const htmls = [];
-    htmls.push(`<li>[${path ? path : "/"}, ${new Date().toLocaleString()}]</li>`);
+    htmls.push(`<li>[${path ? path : "all"}, ${new Date().toLocaleString()}]</li>`);
     for (const [path, size] of pathlist) {
-      htmls.push(`<li><a href='#${path}'>${path}</a>, size=${getByteSize(size)}</li>`);
+      htmls.push(`<li><a href='#${path}'>${new Date(path).toLocaleString()}</a>, size=${getByteSize(size)}</li>`);
     }
 
     document.querySelector("#ui-dir").innerHTML = htmls.join("\n");
-  });
-
-  //
-  // rmdir
-  //
-  addTestWidget(`<button>RMDIR</button>`, async (evt) => {
-    let path = document.querySelector("#fs-path").value;
-    if (path.length < 3) path = undefined;
-
-    await idbdb.rmdir(path);
   });
 
   //

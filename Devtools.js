@@ -1,18 +1,18 @@
 "use strict";
 
-export default function devInit(...args) {
+function devInit(...args) {
   // replace assert
+  console.log("console.assert is replaced");
   console.assert = (c, ...msgs) => {
     if (!c) {
+      console.debug(new Error().stack);
       const output = msgs.length ? msgs.join(", ") : "";
       window.alert("ASSERTION FAILED:\n" + output);
       throw new Error(output);
     }
   };
-
-  console.log("console.assert is replaced");
-  // testDevtools();
 }
+devInit();
 
 // get [min, max)
 export function getRandomInt(min, max) {
@@ -121,7 +121,7 @@ export const addTestWidget = (element, callback = undefined, eventName = "click"
 //
 // download blob
 //
-export const downloadBlob = (blob) => {
+export const downloadBlob = (blob, path) => {
   const link = document.createElement("a");
   link.download = path;
   link.href = window.URL.createObjectURL(blob);

@@ -1,4 +1,4 @@
-import BlobIDB, { BlobWriter } from "./IDBBlob2.js";
+import BlobIDB from "./IDBBlob2.js";
 
 // feature check
 console.info(
@@ -46,7 +46,7 @@ const initMp4Recorder = async (stream) => {
   DEBUG && mr.addEventListener("error", (ev) => log(ev.type));
 
   recordedPath = `/recorded/rec-${new Date().toLocaleString().replace(/[/:]/g, ".")}.mp4`;
-  const idbfile = new BlobWriter(recordedPath, idbdb);
+  const idbfile = new BlobIDB.BlobWriter(recordedPath, idbdb);
 
   const stopRecording = async () => {
     DEBUG && log("stopRecording");
