@@ -16,6 +16,7 @@ const getKey = (tick, seq) => {
   console.assert(typeof seq === "number", `seq is ${typeof seq}`);
   return tick * 256 + seq;
 };
+
 const getTick = (key) => {
   console.assert(typeof key === "number", `key is ${typeof key}`);
   return Math.floor(key / 256);
@@ -58,10 +59,7 @@ export default class BlobIDB {
   };
 
   getLastChunk = (tick, onLastChunk) => {
-    tick = Number(tick);
-    const keyLower = getKey(tick, 0);
-    const keyUpper = getKey(tick, 256);
-    const range = IDBKeyRange.bound(keyLower, keyUpper, false, true);
+    const range = BlobIDB.getBound(tick);
 
     const tx = this.idb.transaction([STORE0], "readonly");
     var request = tx.objectStore(STORE0).openCursor(range, "prev");
@@ -81,11 +79,8 @@ export default class BlobIDB {
   };
 
   getBlob = (tick) => {
-    tick = Number(tick);
     return new Promise((resolve, reject) => {
-      const keyLower = getKey(tick, 0);
-      const keyUpper = getKey(tick, 256);
-      const range = IDBKeyRange.bound(keyLower, keyUpper, false, true);
+      const range = BlobIDB.getBound(tick);
       const tx = this.idb.transaction([STORE0], "readonly");
       const request = tx.objectStore(STORE0).getAll(range);
       request.onerror = () => reject(request.error || `Can't read ${tick}`);
@@ -101,16 +96,9 @@ export default class BlobIDB {
     });
   };
 
-  // delete file
-  delete = async (tickStart, tickEnd) => {
-    let range = undefined;
-    if (tickStart) {
-      tickStart = Number(tickStart);
-      tickEnd = tickEnd ? Number(tickEnd) : tickStart;
-      const keyLower = getKey(tickStart, 0);
-      const keyUpper = getKey(tickEnd, 256);
-      range = IDBKeyRange.bound(keyLower, keyUpper, false, true);
-    }
+  // delete file: [tickStart, tickEnd]
+  delete = async (tickStart, tickEnd = Date.now()) => {
+    const range = tickStart ? BlobIDB.getBound(tickStart, tickEnd) : undefined;
 
     const tx = this.idb.transaction([STORE0], "readwrite");
     tx.objectStore(STORE0).delete(range);
@@ -132,14 +120,9 @@ export default class BlobIDB {
     });
   };
 
-  // return list of files in idb.
+  // return list of files in idb. [tickStart, tickEnd]
   dir = async (tickStart = undefined, tickEnd = undefined) => {
-    let range = undefined;
-    if (tickStart) {
-      const keyLower = getKey(Number(tickStart), 0);
-      const keyUpper = getKey(tickEnd ? Number(tickEnd) : Date.now(), 256);
-      range = IDBKeyRange.bound(keyLower, keyUpper, false, true);
-    }
+    const range = tickStart ? BlobIDB.getBound(tickStart, tickEnd || Date.now()) : undefined;
 
     const tx = this.idb.transaction([STORE0], "readonly");
     var request = tx.objectStore(STORE0).openCursor(range, "prev");
@@ -159,6 +142,11 @@ export default class BlobIDB {
     return new Promise((resolve, reject) => {
       setuptx(tx, () => resolve(pathlist), reject);
     });
+  };
+
+  static getBound = (tickStart, tickEnd = undefined) => {
+    tickEnd = tickEnd || tickStart;
+    return IDBKeyRange.bound(getKey(Number(tickStart), 0), getKey(Number(tickEnd) + 1, 0), false, true);
   };
 
   // writer class
